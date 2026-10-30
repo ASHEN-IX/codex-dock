@@ -64,3 +64,28 @@ pub fn insert_thread(db: &Path, id: &str, rollout: &str) -> Result<()> {
     ))?;
     Ok(())
 }
+
+pub fn run_query(db: &Path, sql: &str) -> Result<String> {
+    run(db, sql)
+}
+
+pub fn merge_from(base_db: &Path, src: &Path, profile_dir: &Path, base_dir: &Path) -> Result<()> {
+    let sql = format!(
+        "ATTACH 'file:{}?immutable=1' AS src;
+         INSERT OR IGNORE INTO projects SELECT * FROM src.projects;
+         INSERT OR IGNORE INTO project_roots SELECT * FROM src.project_roots;
+         INSERT OR IGNORE INTO threads SELECT * FROM src.threads;
+         DETACH src;",
+        src.display()
+    );
+    run(base_db, &sql)?;
+
+    let from = profile_dir.to_string_lossy().to_string();
+    let to = base_dir.to_string_lossy().to_string();
+    let repoint = format!(
+        "UPDATE threads SET rollout_path = replace(rollout_path, '{from}/', '{to}/')
+         WHERE rollout_path LIKE '{from}/%';"
+    );
+    run(base_db, &repoint)?;
+    Ok(())
+}
