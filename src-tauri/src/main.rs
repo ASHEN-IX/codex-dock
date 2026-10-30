@@ -2,7 +2,6 @@
 
 use codex_dock_core::{accounts, store, tray, usage, windows, Paths};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -119,7 +118,7 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
 
-            let mut menu = tauri::menu::Menu::new(app)?;
+            let menu = tauri::menu::Menu::new(app)?;
             {
                 let p = Paths::real();
                 let usages: Vec<_> = accounts::list(&p)
@@ -142,7 +141,7 @@ fn main() {
             let _tray = TrayIconBuilder::with_id("main")
                 .tooltip("Codex Dock")
                 .menu(&menu)
-                .on_menu_event(|app, event| {
+                .on_menu_event(|_app, event| {
                     if let Some(account) = event.id().0.strip_prefix("open:") {
                         let p = Paths::real();
                         let _ = windows::launch(&p, account);
