@@ -67,7 +67,10 @@ pub fn read_with(account: &str, home: &std::path::Path, now: i64, transport: &Tr
         Ok(r) => r,
         Err(e) => {
             let mut u = empty(account, now);
-            u.error = Some(format!("app-server unavailable: {e}"));
+            u.error = Some(format!(
+                "app-server unavailable ({e}) — open a Codex window for this account, or run \
+                 `codex app-server daemon start` with CODEX_HOME set to its profile"
+            ));
             return u;
         }
     };
@@ -89,9 +92,22 @@ pub fn read(p: &Paths, account: &str, now: i64) -> Usage {
     read_with(account, &home, now, &transport)
 }
 
+fn ensure_daemon(home: &std::path::Path) {
+    let _ = std::process::Command::new("codex")
+        .args(["app-server", "daemon", "start"])
+        .env("CODEX_HOME", home)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 fn proxy_request(home: &std::path::Path, method: &str) -> std::result::Result<String, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
+
+    if !home.join("ipc").join("ipc.sock").exists() {
+        ensure_daemon(home);
+    }
 
     let sock = home.join("ipc").join("ipc.sock");
     let mut child = Command::new("codex")

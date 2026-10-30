@@ -80,3 +80,15 @@ fn read_with_reports_transport_failure_without_inventing_numbers() {
     assert_eq!(u.five_hour_percent, None);
     assert_eq!(u.weekly_percent, None);
 }
+
+#[test]
+fn unreachable_app_server_says_how_to_fix_it() {
+    let fake = |_h: &std::path::Path, _m: &str| Err("connect failed".to_string());
+    let u = usage::read_with("work", std::path::Path::new("/tmp"), 1, &fake);
+    let msg = u.error.unwrap_or_default();
+    assert!(msg.contains("connect failed"), "keeps the cause: {msg}");
+    assert!(
+        msg.contains("open a Codex window") || msg.contains("daemon"),
+        "must tell the user what to do, got: {msg}"
+    );
+}

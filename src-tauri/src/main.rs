@@ -87,7 +87,10 @@ fn repair_store() -> Result<serde_json::Value, String> {
     }))
 }
 
-fn refresh_tray(app: &tauri::AppHandle) {
+fn refresh_tray(
+    app: &tauri::AppHandle,
+    rebuild_menu: &dyn Fn() -> tauri::Result<tauri::menu::Menu<tauri::Wry>>,
+) {
     let p = Paths::real();
     let usages: Vec<_> = accounts::list(&p)
         .unwrap_or_default()
@@ -110,16 +113,23 @@ fn refresh_tray(app: &tauri::AppHandle) {
             let _ = tray.set_icon(Some(img));
         }
         let _ = tray.set_tooltip(Some(tray::title(&usages)));
+
+        match rebuild_menu() {
+            Ok(menu) => {
+                let _ = tray.set_menu(Some(menu));
+            }
+            Err(e) => eprintln!("codex-dock: could not rebuild tray menu: {e}"),
+        }
     }
 }
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let handle = app.handle().clone();
-
-            let menu = tauri::menu::Menu::new(app)?;
-            {
+            // Rebuilt on every refresh: a menu built once would show stale limits.
+            let app_for_menu = app.handle().clone();
+            let build_menu = move || -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+                let menu = tauri::menu::Menu::new(&app_for_menu)?;
                 let p = Paths::real();
                 let usages: Vec<_> = accounts::list(&p)
                     .unwrap_or_default()
@@ -128,7 +138,7 @@ fn main() {
                     .collect();
                 for row in tray::menu_rows(&usages) {
                     let item = tauri::menu::MenuItem::with_id(
-                        app,
+                        &app_for_menu,
                         format!("open:{}", row.account),
                         row.label,
                         true,
@@ -136,7 +146,10 @@ fn main() {
                     )?;
                     menu.append(&item)?;
                 }
-            }
+                Ok(menu)
+            };
+            let menu = build_menu()?;
+            let menu_for_refresh = std::sync::Arc::new(build_menu);
 
             let _tray = TrayIconBuilder::with_id("main")
                 .tooltip("Codex Dock")
@@ -148,17 +161,22 @@ fn main() {
                     }
                 })
                 .on_tray_icon_event(|tray, _event| {
-                    refresh_tray(tray.app_handle());
+                    // click handler has no access to build_menu; the 60s tick does the work
+                    let _ = tray;
                 })
                 .build(app)?;
 
             // The spec's 60s tick: keep window and tray from disagreeing.
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                refresh_tray(&handle);
-            });
+            {
+                let h = app.handle().clone();
+                let rebuild = std::sync::Arc::clone(&menu_for_refresh);
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    refresh_tray(&h, rebuild.as_ref());
+                });
+            }
 
-            refresh_tray(app.handle());
+            refresh_tray(app.handle(), menu_for_refresh.as_ref());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
