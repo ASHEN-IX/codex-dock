@@ -3,6 +3,7 @@ pub mod db;
 pub mod error;
 pub mod paths;
 pub mod store;
+pub mod usage;
 pub mod windows;
 pub use paths::Paths;
 pub use error::Error;
