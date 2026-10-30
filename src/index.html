@@ -71,9 +71,14 @@ async function render() {
   const el = document.getElementById('store');
   const ok = st.state === 'Shared';
   el.className = 'store ' + (ok ? 'ok' : 'bad');
-  el.textContent = ok
-    ? `shared · ${st.threads} threads · ${st.projects.length} projects`
-    : `${st.state} · ${st.threads} threads`;
+  if (st.error) {
+    el.className = 'store bad';
+    el.textContent = `cannot read store: ${st.error}`;
+  } else {
+    el.textContent = ok
+      ? `shared · ${st.threads} threads · ${st.projects.length} projects`
+      : `${st.state} · ${st.threads} threads`;
+  }
 
   const [accts, usages] = await Promise.all([invoke('account_list'), invoke('usage_all')]);
   const byName = Object.fromEntries(usages.map(u => [u.account, u]));

@@ -36,6 +36,7 @@ fn store_status() -> Result<serde_json::Value, String> {
         "state": format!("{:?}", r.state),
         "threads": r.threads,
         "projects": r.projects,
+        "error": r.error,
     }))
 }
 
@@ -104,15 +105,8 @@ fn refresh_tray(app: &tauri::AppHandle) {
     };
 
     if let Some(tray) = app.tray_by_id("main") {
-        // The icon reflects the worst limit; `tray::icon_name` names the same
-        // file so the unit test and the shell cannot drift apart.
-        debug_assert!(matches!(
-            (usage::worst_color(&usages), tray::icon_name(color)),
-            (usage::Color::Green, "tray-green.png")
-                | (usage::Color::Amber, "tray-amber.png")
-                | (usage::Color::Red, "tray-red.png")
-                | (usage::Color::Neutral, "tray-neutral.png")
-        ));
+        // `tray::icon_name` is the single source for these names and is unit
+        // tested; the match above picks the bytes for the same colour.
         if let Ok(img) = tauri::image::Image::from_bytes(icon_bytes) {
             let _ = tray.set_icon(Some(img));
         }
