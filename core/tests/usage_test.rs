@@ -57,3 +57,26 @@ fn color_boundaries_are_exact() {
     assert_eq!(usage::worst_color(&[stub(Some(84.9))]), Color::Amber);
     assert_eq!(usage::worst_color(&[stub(Some(85.0))]), Color::Red);
 }
+
+#[test]
+fn read_parses_a_framed_rate_limits_reply() {
+    // The executor seam: usage::read_with runs whatever transport it is given,
+    // so the socket itself is not needed to test the parsing path end to end.
+    let body = r#"{"jsonrpc":"2.0","id":2,"result":{"five_hour_limit_percent":42,"plan_type":"pro"}}"#;
+    let framed = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let fake = |_home: &std::path::Path, _method: &str| Ok(framed.clone());
+    let u = usage::read_with("work", std::path::Path::new("/tmp"), 99, &fake);
+    assert_eq!(u.five_hour_percent, Some(42.0));
+    assert_eq!(u.plan.as_deref(), Some("pro"));
+    assert_eq!(u.checked_at, 99);
+    assert!(u.error.is_none());
+}
+
+#[test]
+fn read_with_reports_transport_failure_without_inventing_numbers() {
+    let fake = |_h: &std::path::Path, _m: &str| Err("socket refused".to_string());
+    let u = usage::read_with("work", std::path::Path::new("/tmp"), 5, &fake);
+    assert!(u.error.as_deref().unwrap_or("").contains("socket refused"));
+    assert_eq!(u.five_hour_percent, None);
+    assert_eq!(u.weekly_percent, None);
+}

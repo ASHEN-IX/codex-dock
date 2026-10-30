@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod db;
 pub mod error;
 pub mod paths;
+pub mod rpc;
 pub mod store;
 pub mod usage;
 pub mod windows;

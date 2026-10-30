@@ -58,31 +58,68 @@ pub fn worst_color(usages: &[Usage]) -> Color {
     }
 }
 
-pub fn read(p: &Paths, account: &str, now: i64) -> Usage {
-    let home = p.profiles.join(account);
-    let out = std::process::Command::new("codex")
-        .args(["app-server", "proxy", "account/rateLimits/read"])
-        .env("CODEX_HOME", &home)
-        .output();
+/// Transport seam: given the profile home and method, return the raw framed
+/// bytes from the app-server, or a transport error string.
+pub type Transport<'a> = dyn Fn(&std::path::Path, &str) -> std::result::Result<String, String> + 'a;
 
-    match out {
-        Ok(o) if o.status.success() => {
-            parse_rate_limits(account, &String::from_utf8_lossy(&o.stdout), now)
-        }
-        Ok(o) => {
-            let mut u = empty(account, now);
-            u.error = Some(format!(
-                "app-server unavailable: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            ));
-            u
-        }
+pub fn read_with(account: &str, home: &std::path::Path, now: i64, transport: &Transport<'_>) -> Usage {
+    let raw = match transport(home, "account/rateLimits/read") {
+        Ok(r) => r,
         Err(e) => {
             let mut u = empty(account, now);
-            u.error = Some(format!("could not run codex app-server: {e}"));
+            u.error = Some(format!("app-server unavailable: {e}"));
+            return u;
+        }
+    };
+    match crate::rpc::decode_response(&raw, 2) {
+        Ok(v) => parse_rate_limits(account, &v.to_string(), now),
+        Err(e) => {
+            let mut u = empty(account, now);
+            u.error = Some(e.to_string());
             u
         }
     }
+}
+
+pub fn read(p: &Paths, account: &str, now: i64) -> Usage {
+    let home = p.profiles.join(account);
+    let transport = |home: &std::path::Path, method: &str| -> std::result::Result<String, String> {
+        proxy_request(home, method)
+    };
+    read_with(account, &home, now, &transport)
+}
+
+fn proxy_request(home: &std::path::Path, method: &str) -> std::result::Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let sock = home.join("ipc").join("ipc.sock");
+    let mut child = Command::new("codex")
+        .args(["app-server", "proxy", "--sock"])
+        .arg(&sock)
+        .env("CODEX_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run codex app-server proxy: {e}"))?;
+
+    {
+        let stdin = child.stdin.as_mut().ok_or("no stdin")?;
+        let init = crate::rpc::encode_request(1, "initialize");
+        let call = crate::rpc::encode_request(2, method);
+        stdin
+            .write_all(format!("{init}{call}").as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+    }
+
+    let out = child.wait_with_output().map_err(|e| format!("wait failed: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    if text.is_empty() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(err.trim().lines().last().unwrap_or("no output").to_string());
+    }
+    Ok(text)
 }
 
 fn empty(account: &str, now: i64) -> Usage {
