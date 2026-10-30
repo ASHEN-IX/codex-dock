@@ -15,7 +15,7 @@ test:
 
 cli:
 	$(CARGO) build -p codex-dock-core
-	@echo "built: target/debug/codex-dock"
+	@echo "built: target/debug/codex-dock-cli"
 
 setup:
 	$(CARGO) install tauri-cli --version "^2"
@@ -24,7 +24,7 @@ app:
 	$(CARGO) tauri dev
 
 status: cli
-	@./target/debug/codex-dock status
+	@./target/debug/codex-dock-cli status
 
 clean:
 	$(CARGO) clean
