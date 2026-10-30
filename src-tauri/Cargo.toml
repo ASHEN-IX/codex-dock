@@ -1,0 +1,12 @@
+[package]
+name = "codex-dock"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codex-dock-core = { path = "../core" }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon"] }
+
+[build-dependencies]
+tauri-build = { version = "2" }

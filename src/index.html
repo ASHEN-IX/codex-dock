@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Codex Dock</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+         background: #0d1117; color: #e6edf3; }
+  header { display: flex; align-items: center; gap: 12px;
+           padding: 14px 18px; border-bottom: 1px solid #21262d; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; }
+  .store { font-size: 12px; color: #8b949e; }
+  .store.ok { color: #3fb950; }
+  .store.bad { color: #f85149; }
+  main { padding: 12px 18px; }
+  .acct { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px;
+          padding: 12px; border: 1px solid #21262d; border-radius: 8px;
+          margin-bottom: 10px; background: #161b22; }
+  .name { font-weight: 600; }
+  .meta { font-size: 12px; color: #8b949e; }
+  .bars { grid-column: 1 / -1; display: flex; gap: 16px; margin-top: 6px; }
+  .bar { flex: 1; }
+  .bar span { font-size: 11px; color: #8b949e; }
+  .track { height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
+  .fill { height: 100%; background: #3fb950; }
+  .fill.amber { background: #d29922; }
+  .fill.red { background: #f85149; }
+  .fill.none { background: #30363d; }
+  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+           border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; }
+  button:hover { background: #30363d; }
+  button.primary { background: #238636; border-color: #2ea043; }
+  .err { color: #f85149; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Codex Dock</h1>
+  <span id="store" class="store">checking…</span>
+  <button id="repair">Repair store</button>
+</header>
+<main id="accounts"></main>
+<script>
+const invoke = window.__TAURI__?.core?.invoke;
+
+function bar(label, pct) {
+  const v = (pct === null || pct === undefined) ? null : pct;
+  const cls = v === null ? 'none' : v >= 85 ? 'red' : v >= 60 ? 'amber' : '';
+  const text = v === null ? '—' : v.toFixed(1) + '%';
+  return `<div class="bar"><span>${label} ${text}</span>
+    <div class="track"><div class="fill ${cls}" style="width:${v === null ? 0 : Math.min(v,100)}%"></div></div></div>`;
+}
+
+async function refresh() {
+  if (!invoke) return;
+  const st = await invoke('store_status');
+  const el = document.getElementById('store');
+  const ok = st.state === 'Shared';
+  el.className = 'store ' + (ok ? 'ok' : 'bad');
+  el.textContent = ok
+    ? `shared · ${st.threads} threads · ${st.projects.length} projects`
+    : `${st.state} · ${st.threads} threads`;
+
+  const [accts, usages] = await Promise.all([invoke('account_list'), invoke('usage_all')]);
+  const byName = Object.fromEntries(usages.map(u => [u.account, u]));
+  document.getElementById('accounts').innerHTML = accts.map(a => {
+    const u = byName[a.name] || {};
+    return `<div class="acct">
+      <div>
+        <div class="name">${a.name}</div>
+        <div class="meta">${a.loggedIn ? (u.plan || 'signed in') : 'signed out'}
+          ${u.error ? `<span class="err"> · ${u.error}</span>` : ''}</div>
+      </div>
+      <button class="primary" onclick="invoke('open_window',{account:'${a.name}'})">Open</button>
+      <div class="bars">
+        ${bar('5-hour', u.fiveHour)}
+        ${bar('weekly', u.weekly)}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('repair')?.addEventListener('click', async () => {
+  await invoke('repair_store');
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>

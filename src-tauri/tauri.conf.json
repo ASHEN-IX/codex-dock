@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Dock",
+  "version": "0.1.0",
+  "identifier": "dev.ashenix.codex-dock",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Codex Dock",
+        "width": 720,
+        "height": 560,
+        "resizable": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "assets/tray-neutral.png",
+      "iconAsTemplate": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["assets/tray-green.png"]
+  }
+}
