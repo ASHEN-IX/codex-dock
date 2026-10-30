@@ -42,7 +42,13 @@
 </header>
 <main id="accounts"></main>
 <script>
-const invoke = window.__TAURI__?.core?.invoke;
+const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
+
+function fatal(msg) {
+  document.getElementById('accounts').innerHTML =
+    `<div class="acct"><div class="name">Cannot reach the backend</div>
+     <div class="meta err">${msg}</div></div>`;
+}
 
 function bar(label, pct) {
   const v = (pct === null || pct === undefined) ? null : pct;
@@ -53,7 +59,14 @@ function bar(label, pct) {
 }
 
 async function refresh() {
-  if (!invoke) return;
+  try { await render(); } catch (e) { fatal(String(e)); }
+}
+
+async function render() {
+  if (!invoke) {
+    fatal('window.__TAURI__ is undefined — the page is running without the Tauri bridge.');
+    return;
+  }
   const st = await invoke('store_status');
   const el = document.getElementById('store');
   const ok = st.state === 'Shared';

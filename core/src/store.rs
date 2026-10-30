@@ -24,6 +24,8 @@ pub struct StoreReport {
     pub threads: usize,
     pub projects: Vec<String>,
     pub inodes: Vec<(String, u64)>,
+    /// Why the store could not be read, when it could not be. Never a fake zero.
+    pub error: Option<String>,
 }
 
 pub fn inspect(p: &Paths) -> StoreReport {
@@ -85,7 +87,12 @@ pub fn inspect(p: &Paths) -> StoreReport {
         }
     }
 
-    report(StoreState::Shared, &base_db)
+    // Do not claim health we did not verify: if the DB cannot be read, say so.
+    let probe = report(StoreState::Shared, &base_db);
+    if probe.error.is_some() {
+        return probe;
+    }
+    probe
 }
 
 fn first(v: &[String]) -> String {
@@ -93,9 +100,15 @@ fn first(v: &[String]) -> String {
 }
 
 fn report(state: StoreState, base_db: &std::path::Path) -> StoreReport {
-    let threads = db::thread_count(base_db).unwrap_or(0);
-    let projects = db::project_names(base_db).unwrap_or_default();
-    StoreReport { state, threads, projects, inodes: Vec::new() }
+    let (threads, projects, error) = if !base_db.exists() {
+        (0, Vec::new(), None)
+    } else {
+        match (db::thread_count(base_db), db::project_names(base_db)) {
+            (Ok(t), Ok(p)) => (t, p, None),
+            (Err(e), _) | (_, Err(e)) => (0, Vec::new(), Some(e.to_string())),
+        }
+    };
+    StoreReport { state, threads, projects, inodes: Vec::new(), error }
 }
 
 use crate::error::{Error, Result};
@@ -126,29 +139,17 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     }
 
     // 1. Break a cyclic auth.json: materialise a real file, keep the old link.
+    // A genuine cycle is exactly the case where the link cannot be resolved.
+    // The benign live shape (base/auth.json -> <real profile>/auth.json)
+    // resolves fine and must be left untouched.
     let base_auth = p.base.join("auth.json");
-    if base_auth.is_symlink() {
-        if let Ok(target) = std::fs::canonicalize(&base_auth) {
-            let mut cyclic = false;
-            if let Ok(rd) = std::fs::read_dir(&p.profiles) {
-                for e in rd.flatten() {
-                    if let Ok(prof) = std::fs::canonicalize(e.path()) {
-                        if target.starts_with(&prof) {
-                            cyclic = true;
-                        }
-                    }
-                }
-            }
-            if cyclic {
-                let bytes = std::fs::read(&target)?;
-                std::fs::copy(&target, backup.join("base-auth.json"))?;
-                let link = p.base.join("auth.json");
-                let stale = backup.join("base-auth.json.link");
-                std::fs::create_dir_all(backup)?;
-                std::fs::rename(&link, &stale)?;
-                std::fs::write(&link, bytes)?;
-            }
-        }
+    if base_auth.is_symlink() && std::fs::canonicalize(&base_auth).is_err() {
+        let link = p.base.join("auth.json");
+        let stale = backup.join("base-auth.json.link");
+        std::fs::create_dir_all(backup)?;
+        std::fs::rename(&link, &stale)?;
+        // No credential can be recovered from a loop; leave the base logged
+        // out rather than inventing one. The profile's own auth.json is intact.
     }
 
     // 2. Per-profile: merge a split store, then link every shared path.
@@ -163,13 +164,35 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     }
     profile_dirs.sort();
 
+    let base_db = p.base.join("state_5.sqlite");
+    let base_real = std::fs::canonicalize(&p.base).ok();
+
     for (name, dir) in &profile_dirs {
+        // A profile directory that resolves to the base IS the shared store.
+        // Linking inside it, or moving anything out of it, would destroy it.
+        let dir_real = std::fs::canonicalize(dir).ok();
+        let is_base_itself = match (&dir_real, &base_real) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+        if is_base_itself {
+            continue;
+        }
+
         let prof_db = dir.join("state_5.sqlite");
-        if prof_db.exists() && !prof_db.is_symlink() {
-            if let Ok(n) = db::thread_count(&prof_db) {
-                if n > 0 {
-                    db::merge_from(&p.base.join("state_5.sqlite"), &prof_db, dir, &p.base)?;
-                }
+        let prof_real = std::fs::canonicalize(&prof_db).ok();
+        let points_at_base_db = match (&prof_real, std::fs::canonicalize(&base_db).ok()) {
+            (Some(a), Some(b)) => *a == b,
+            _ => false,
+        };
+
+        if prof_db.exists() && !prof_db.is_symlink() && !points_at_base_db {
+            // An unreadable profile DB is never displaced: the user's data may
+            // be in a schema we do not understand. Merge only what we can read.
+            let n = db::thread_count(&prof_db)?;
+            if n > 0 {
+                db::merge_from(&base_db, &prof_db, dir, &p.base)?;
+                db::copy_sessions(dir, &p.base)?;
             }
             move_aside(&prof_db, backup, &format!("{name}/old-state_5.sqlite"))?;
         }
@@ -183,9 +206,20 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
             if target.is_symlink() {
                 std::fs::remove_file(&target)?;
             } else if target.exists() {
+                if item == "state_5.sqlite" && points_at_base_db {
+                    continue;
+                }
                 move_aside(&target, backup, &format!("{name}/old-{item}"))?;
             }
             std::os::unix::fs::symlink(&shared, &target)?;
+        }
+
+        // Sidebars should list the same projects in every window without
+        // touching which account each window is signed in as.
+        let base_state = p.base.join(".codex-global-state.json");
+        let prof_state = dir.join(".codex-global-state.json");
+        if base_state.exists() && prof_state.exists() {
+            merge_global_state(&base_state, &prof_state, &backup.join(name))?;
         }
 
         for side in ["state_5.sqlite-wal", "state_5.sqlite-shm"] {
@@ -222,4 +256,53 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     let mut final_report = inspect(p);
     final_report.inodes = inodes;
     Ok(final_report)
+}
+
+/// Merge the shared project list into a per-window desktop state file.
+/// The window's own `local-document-identity` is never touched: that is what
+/// keeps each window on its own account while showing the same projects.
+pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<()> {
+    if !base.exists() || !target.exists() {
+        return Ok(());
+    }
+    let src: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(base)?)
+        .map_err(|e| Error::Msg(format!("bad base state json: {e}")))?;
+    let mut dst: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(target)?)
+        .map_err(|e| Error::Msg(format!("bad profile state json: {e}")))?;
+
+    std::fs::create_dir_all(backup)?;
+    std::fs::copy(target, backup.join("global-state.json"))?;
+
+    for key in ["local-projects", "app-server-projects-migration-by-host"] {
+        let (Some(src_map), Some(dst_map)) = (
+            src.get(key).and_then(|v| v.as_object()),
+            dst.get(key).and_then(|v| v.as_object()),
+        ) else {
+            continue;
+        };
+        let mut merged = dst_map.clone();
+        for (k, v) in src_map {
+            merged.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        dst[key] = serde_json::Value::Object(merged);
+    }
+
+    // Sidebar presentation only; never the identity block.
+    if let (Some(s_atom), Some(d_atom)) = (
+        src.get("electron-persisted-atom-state").and_then(|v| v.as_object()),
+        dst.get("electron-persisted-atom-state").and_then(|v| v.as_object()).cloned(),
+    ) {
+        let mut atoms = d_atom;
+        for k in ["flat-project-sidebar-preferences-v1", "new-task-project-by-computer"] {
+            if let Some(v) = s_atom.get(k) {
+                atoms.entry(k.to_string()).or_insert_with(|| v.clone());
+            }
+        }
+        dst["electron-persisted-atom-state"] = serde_json::Value::Object(atoms);
+    }
+
+    let text = serde_json::to_string_pretty(&dst)
+        .map_err(|e| Error::Msg(format!("could not serialise state: {e}")))?;
+    std::fs::write(target, text)?;
+    Ok(())
 }

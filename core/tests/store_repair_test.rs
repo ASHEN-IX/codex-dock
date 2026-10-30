@@ -17,12 +17,17 @@ fn repair_breaks_auth_cycle_and_links_store() {
     db::create_empty(&p.base.join("state_5.sqlite")).unwrap();
     db::create_empty(&p.profiles.join("work/state_5.sqlite")).unwrap();
     std::fs::write(p.profiles.join("work/auth.json"), r#"{"tokens":{"account_id":"abc"}}"#).unwrap();
+    // The benign live shape: base/auth.json -> a REAL profile's auth.json.
+    // It resolves fine, so repair must leave it exactly as it is.
     std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
 
     let bak = p.backup_dir("stamp");
     let r = store::repair(&p, &bak).unwrap();
     assert!(matches!(r.state, StoreState::Shared), "got {:?}", r.state);
-    assert!(!p.base.join("auth.json").is_symlink(), "auth.json must be materialised");
+    assert!(p.base.join("auth.json").is_symlink(), "benign link must be preserved");
+    let (id, ok) = codex_dock_core::accounts::auth_info(&p.base.join("auth.json"));
+    assert_eq!(id.as_deref(), Some("abc"), "and still resolve to the account");
+    assert!(ok);
     assert_eq!(
         db::inode(&p.base.join("state_5.sqlite")).unwrap(),
         db::inode(&p.profiles.join("work/state_5.sqlite")).unwrap()

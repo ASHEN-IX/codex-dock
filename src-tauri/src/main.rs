@@ -94,27 +94,78 @@ fn refresh_tray(app: &tauri::AppHandle) {
         .into_iter()
         .map(|a| usage::read(&p, &a.name, now()))
         .collect();
+
     let color = usage::worst_color(&usages);
+    let icon_bytes: &[u8] = match color {
+        usage::Color::Green => include_bytes!("../icons/tray-green.png"),
+        usage::Color::Amber => include_bytes!("../icons/tray-amber.png"),
+        usage::Color::Red => include_bytes!("../icons/tray-red.png"),
+        usage::Color::Neutral => include_bytes!("../icons/tray-neutral.png"),
+    };
+
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(tray::title(&usages)));
-        if let Ok(img) = tauri::image::Image::from_bytes(include_bytes!(
-            "../assets/tray-neutral.png"
-        )) {
+        // The icon reflects the worst limit; `tray::icon_name` names the same
+        // file so the unit test and the shell cannot drift apart.
+        debug_assert!(matches!(
+            (usage::worst_color(&usages), tray::icon_name(color)),
+            (usage::Color::Green, "tray-green.png")
+                | (usage::Color::Amber, "tray-amber.png")
+                | (usage::Color::Red, "tray-red.png")
+                | (usage::Color::Neutral, "tray-neutral.png")
+        ));
+        if let Ok(img) = tauri::image::Image::from_bytes(icon_bytes) {
             let _ = tray.set_icon(Some(img));
         }
+        let _ = tray.set_tooltip(Some(tray::title(&usages)));
     }
-    let _ = color;
 }
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            let handle = app.handle().clone();
+
+            let mut menu = tauri::menu::Menu::new(app)?;
+            {
+                let p = Paths::real();
+                let usages: Vec<_> = accounts::list(&p)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|a| usage::read(&p, &a.name, now()))
+                    .collect();
+                for row in tray::menu_rows(&usages) {
+                    let item = tauri::menu::MenuItem::with_id(
+                        app,
+                        format!("open:{}", row.account),
+                        row.label,
+                        true,
+                        None::<&str>,
+                    )?;
+                    menu.append(&item)?;
+                }
+            }
+
             let _tray = TrayIconBuilder::with_id("main")
                 .tooltip("Codex Dock")
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    if let Some(account) = event.id().0.strip_prefix("open:") {
+                        let p = Paths::real();
+                        let _ = windows::launch(&p, account);
+                    }
+                })
                 .on_tray_icon_event(|tray, _event| {
                     refresh_tray(tray.app_handle());
                 })
                 .build(app)?;
+
+            // The spec's 60s tick: keep window and tray from disagreeing.
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                refresh_tray(&handle);
+            });
+
+            refresh_tray(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

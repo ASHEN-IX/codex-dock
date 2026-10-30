@@ -71,7 +71,10 @@ pub fn run_query(db: &Path, sql: &str) -> Result<String> {
 
 pub fn merge_from(base_db: &Path, src: &Path, profile_dir: &Path, base_dir: &Path) -> Result<()> {
     let sql = format!(
-        "ATTACH 'file:{}?immutable=1' AS src;
+        // NO immutable=1: with WAL, committed rows can live only in the -wal
+        // file, and an immutable attach silently skips them -- merging nothing
+        // while the caller then moves the database aside.
+        "ATTACH 'file:{}?mode=ro' AS src;
          INSERT OR IGNORE INTO projects SELECT * FROM src.projects;
          INSERT OR IGNORE INTO project_roots SELECT * FROM src.project_roots;
          INSERT OR IGNORE INTO threads SELECT * FROM src.threads;
@@ -87,5 +90,29 @@ pub fn merge_from(base_db: &Path, src: &Path, profile_dir: &Path, base_dir: &Pat
          WHERE rollout_path LIKE '{from}/%';"
     );
     run(base_db, &repoint)?;
+    Ok(())
+}
+
+/// Copy a profile's session rollouts into the base so merged rows resolve.
+pub fn copy_sessions(profile_dir: &Path, base_dir: &Path) -> Result<()> {
+    let src = profile_dir.join("sessions");
+    if !src.exists() || src.is_symlink() {
+        return Ok(());
+    }
+    let dest = base_dir.join("sessions");
+    copy_tree(&src, &dest)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if !target.exists() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
     Ok(())
 }

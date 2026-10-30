@@ -16,13 +16,16 @@
       }
     ],
     "trayIcon": {
-      "iconPath": "assets/tray-neutral.png",
+      "iconPath": "icons/tray-neutral.png",
       "iconAsTemplate": false
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["assets/tray-green.png"]
+    "icon": [
+      "icons/tray-green.png"
+    ]
   }
 }
