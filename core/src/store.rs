@@ -40,24 +40,20 @@ pub fn inspect(p: &Paths) -> StoreReport {
     }
     accounts.sort();
 
-    // Nested: the profiles dir lives inside the base store.
+    // Cycle: base/auth.json cannot be resolved because following it loops.
+    // That is exactly the dangerous shape (base/auth.json -> profile/auth.json
+    // where the profile directory resolves back into the base). Two benign
+    // shapes must not be reported: base/auth.json -> <real profile>/auth.json
+    // (the live setup) and a profile directory that is a symlink to the base.
+    let base_auth = p.base.join("auth.json");
+    if base_auth.is_symlink() && std::fs::canonicalize(&base_auth).is_err() {
+        return report(StoreState::AuthCycle, &base_db);
+    }
+
+    // Nested: the profiles dir lives inside (or is) the base store.
     if let (Ok(a), Ok(b)) = (std::fs::canonicalize(&p.profiles), std::fs::canonicalize(&p.base)) {
         if a.starts_with(&b) {
             return report(StoreState::Nested { profile: first(&accounts) }, &base_db);
-        }
-    }
-
-    // Auth cycle: base auth.json resolves into a profile that resolves back to base.
-    let base_auth = p.base.join("auth.json");
-    if base_auth.is_symlink() {
-        if let Ok(target) = std::fs::canonicalize(&base_auth) {
-            for name in &accounts {
-                if let Ok(prof) = std::fs::canonicalize(p.profiles.join(name)) {
-                    if target.starts_with(&prof) {
-                        return report(StoreState::AuthCycle, &base_db);
-                    }
-                }
-            }
         }
     }
 
@@ -65,14 +61,26 @@ pub fn inspect(p: &Paths) -> StoreReport {
         return report(StoreState::NotConfigured, &base_db);
     }
 
-    // Split: a profile has its own real DB holding threads.
+    // Split: a profile has a DB holding threads that is NOT the shared file.
+    // Comparing inodes (not paths) is what makes a profile that is itself a
+    // symlink to the base read as shared rather than split.
+    let base_ino = db::inode(&base_db).ok();
     for name in &accounts {
         let prof_db = p.profiles.join(name).join("state_5.sqlite");
-        if prof_db.exists() && !prof_db.is_symlink() {
-            if let Ok(n) = db::thread_count(&prof_db) {
-                if n > 0 {
-                    return report(StoreState::Split { threads_in_profile: n }, &base_db);
-                }
+        if !prof_db.exists() {
+            continue;
+        }
+        if let (Some(b), Ok(pi)) = (base_ino, db::inode(&prof_db)) {
+            if b == pi {
+                continue;
+            }
+        }
+        if prof_db.is_symlink() {
+            continue;
+        }
+        if let Ok(n) = db::thread_count(&prof_db) {
+            if n > 0 {
+                return report(StoreState::Split { threads_in_profile: n }, &base_db);
             }
         }
     }
