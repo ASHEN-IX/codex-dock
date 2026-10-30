@@ -51,3 +51,66 @@ pub fn list(p: &Paths) -> Result<Vec<Account>> {
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
+    if !valid_name(name) {
+        return Err(Error::Msg(format!(
+            "invalid account name '{name}': use letters, digits, '-' or '_'"
+        )));
+    }
+    let path = p.profiles.join(name);
+    if path.exists() {
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+    std::fs::create_dir_all(&path)?;
+
+    if let Some(src) = clone_from {
+        for item in ["config.toml", "rules", "skills"] {
+            let from = p.profiles.join(src).join(item);
+            if !from.exists() {
+                continue;
+            }
+            let to = path.join(item);
+            if from.is_dir() {
+                copy_dir(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+            }
+        }
+    }
+
+    let (account_id, logged_in) = auth_info(&path.join("auth.json"));
+    Ok(Account { name: name.to_string(), path, account_id, logged_in })
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
+    let from = p.profiles.join(name);
+    if !from.exists() {
+        return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+    std::fs::create_dir_all(backup)?;
+    let to = backup.join(name);
+    std::fs::rename(&from, &to)?;
+    Ok(to)
+}
