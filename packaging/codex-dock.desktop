@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Codex Dock
+GenericName=Codex Usage Dock
+Comment=Each Codex account in its own window, and its usage in the tray
+Exec=codex-dock
+Icon=codex-dock
+Terminal=false
+Categories=Utility;Development;
+Keywords=codex;usage;accounts;tray;
+StartupNotify=true
+StartupWMClass=codex-dock
+SingleMainWindow=true

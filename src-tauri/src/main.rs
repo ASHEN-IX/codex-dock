@@ -14,11 +14,27 @@ const CACHE_TTL_SECS: i64 = 60;
 /// libappindicator app's generic `tray_icon_tray_app_main` export.
 const TRAY_ID: &str = "codex-dock-tray";
 
+/// 32px source; Plasma scales it down for the panel. Rendering larger than
+/// 22px keeps the ring smooth on HiDPI panels.
+const TRAY_ICON_SIZE: u32 = 32;
+
+/// The dashboard window. Closing it hides it rather than quitting: the tray is
+/// the app's home, and a dock that disappears should stop reporting usage.
+const MAIN_WINDOW: &str = "main";
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn show_dashboard(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 #[tauri::command]
@@ -145,20 +161,12 @@ fn refresh_tray(
             .collect()
     };
 
-    let color = usage::worst_color(&usages);
-    let icon_bytes: &[u8] = match color {
-        usage::Color::Green => include_bytes!("../icons/tray-green.png"),
-        usage::Color::Amber => include_bytes!("../icons/tray-amber.png"),
-        usage::Color::Red => include_bytes!("../icons/tray-red.png"),
-        usage::Color::Neutral => include_bytes!("../icons/tray-neutral.png"),
-    };
-
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        // `tray::icon_name` is the single source for these names and is unit
-        // tested; the match above picks the bytes for the same colour.
-        if let Ok(img) = tauri::image::Image::from_bytes(icon_bytes) {
-            let _ = tray.set_icon(Some(img));
-        }
+        // A gauge ring filled to the worst percentage: the colour alone said
+        // "fine/warning/bad" but not "how close to the limit".
+        let icon = tray::icon_for(&usages, TRAY_ICON_SIZE);
+        let img = tauri::image::Image::new_owned(icon.rgba, icon.width, icon.height);
+        let _ = tray.set_icon(Some(img));
         let _ = tray.set_tooltip(Some(tray::title(&usages)));
 
         match rebuild_menu() {
@@ -171,7 +179,15 @@ fn refresh_tray(
 }
 
 fn main() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // One dock per session. A second launch (double-clicking the shortcut again)
+    // raises the running window instead of starting a duplicate tray icon.
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        show_dashboard(app);
+    }));
+
+    builder
         .manage(UsageCache(std::sync::Mutex::new(usage::Cache::new(CACHE_TTL_SECS))))
         .setup(|app| {
             // Rebuilt on every refresh: a menu built once would show stale limits.
@@ -191,16 +207,52 @@ fn main() {
                         .map(|a| cached_usage(&p, &mut cache, &a.name))
                         .collect()
                 };
-                for row in tray::menu_rows_at(&usages, now()) {
-                    let item = tauri::menu::MenuItem::with_id(
-                        &app_for_menu,
-                        format!("open:{}", row.account),
-                        row.label,
-                        true,
-                        None::<&str>,
-                    )?;
-                    menu.append(&item)?;
+                for (i, entry) in tray::menu_entries(&usages, now()).into_iter().enumerate() {
+                    match entry.kind {
+                        tray::RowKind::Separator => {
+                            menu.append(&tauri::menu::PredefinedMenuItem::separator(
+                                &app_for_menu,
+                            )?)?;
+                        }
+                        tray::RowKind::Header => {
+                            // Disabled items render as plain text: the native
+                            // equivalent of a section heading.
+                            let item = tauri::menu::MenuItem::with_id(
+                                &app_for_menu,
+                                format!("header:{i}"),
+                                entry.label,
+                                false,
+                                None::<&str>,
+                            )?;
+                            menu.append(&item)?;
+                        }
+                        tray::RowKind::Account => {
+                            let item = tauri::menu::MenuItem::with_id(
+                                &app_for_menu,
+                                format!("open:{}", entry.account),
+                                entry.label,
+                                entry.enabled,
+                                None::<&str>,
+                            )?;
+                            menu.append(&item)?;
+                        }
+                    }
                 }
+                menu.append(&tauri::menu::PredefinedMenuItem::separator(&app_for_menu)?)?;
+                menu.append(&tauri::menu::MenuItem::with_id(
+                    &app_for_menu,
+                    "open-dock",
+                    "Open Codex Dock",
+                    true,
+                    None::<&str>,
+                )?)?;
+                menu.append(&tauri::menu::MenuItem::with_id(
+                    &app_for_menu,
+                    "quit",
+                    "Quit Codex Dock",
+                    true,
+                    None::<&str>,
+                )?)?;
                 Ok(menu)
             };
             let menu = build_menu()?;
@@ -210,7 +262,16 @@ fn main() {
                 .tooltip("Codex Dock")
                 .menu(&menu)
                 .on_menu_event(|_app, event| {
-                    if let Some(account) = event.id().0.strip_prefix("open:") {
+                    let id = event.id().0.as_str();
+                    if id == "quit" {
+                        _app.exit(0);
+                        return;
+                    }
+                    if id == "open-dock" {
+                        show_dashboard(_app);
+                        return;
+                    }
+                    if let Some(account) = id.strip_prefix("open:") {
                         let p = Paths::real();
                         // Same rule as the window button: raise, never duplicate.
                         if !windows::focus(account) {
@@ -218,9 +279,16 @@ fn main() {
                         }
                     }
                 })
-                .on_tray_icon_event(|tray, _event| {
-                    // click handler has no access to build_menu; the 60s tick does the work
-                    let _ = tray;
+                .on_tray_icon_event(|tray, event| {
+                    // Left click opens the dashboard; the menu keeps the numbers.
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_dashboard(tray.app_handle());
+                    }
                 })
                 .build(app)?;
 
@@ -236,6 +304,13 @@ fn main() {
 
             refresh_tray(app.handle(), menu_for_refresh.as_ref());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // "Closed" means "docked": hide it, keep the tray and the tick.
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             account_list,

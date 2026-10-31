@@ -8,6 +8,7 @@ codex-dock-core = { path = "../core" }
 serde_json = "1"
 # image-png is required for Image::from_bytes (tray icon decoding).
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -63,3 +63,156 @@ fn a_fresh_row_has_no_staleness_suffix() {
     assert!(!rows[0].label.contains("last checked"));
     assert!(!rows[0].label.contains("unavailable"));
 }
+
+#[test]
+fn text_bar_fills_proportionally() {
+    assert_eq!(tray::text_bar(Some(0.0), 10), "░░░░░░░░░░");
+    assert_eq!(tray::text_bar(Some(50.0), 10), "▓▓▓▓▓░░░░░");
+    assert_eq!(tray::text_bar(Some(100.0), 10), "▓▓▓▓▓▓▓▓▓▓");
+    // Clamped, never longer than the track.
+    assert_eq!(tray::text_bar(Some(140.0), 10).chars().count(), 10);
+}
+
+#[test]
+fn text_bar_without_a_reading_is_all_empty() {
+    let bar = tray::text_bar(None, 10);
+    assert_eq!(bar, "░░░░░░░░░░");
+    assert!(!bar.contains('▓'), "must not imply a value");
+}
+
+#[test]
+fn reset_label_counts_down_naturally() {
+    assert_eq!(
+        tray::reset_label(Some(1000 + 2 * 3600 + 15 * 60), 1000).as_deref(),
+        Some("resets in 2h 15m")
+    );
+    assert_eq!(
+        tray::reset_label(Some(1000 + 45 * 60), 1000).as_deref(),
+        Some("resets in 45m")
+    );
+    assert_eq!(
+        tray::reset_label(Some(1000 + 86400 + 3600), 1000).as_deref(),
+        Some("resets in 1d 1h")
+    );
+    assert_eq!(
+        tray::reset_label(Some(900), 1000).as_deref(),
+        Some("resetting now")
+    );
+    assert_eq!(tray::reset_label(None, 1000), None);
+}
+
+#[test]
+fn gauge_is_a_ring_not_a_filled_disc() {
+    let icon = tray::gauge_icon(Some(50.0), Color::Green, 32);
+    assert_eq!((icon.width, icon.height), (32, 32));
+    assert_eq!(icon.rgba.len(), 32 * 32 * 4);
+    // The centre is hollow, the ring edge is drawn.
+    assert_eq!(icon.alpha_at(16, 16), 0, "centre must be transparent");
+    assert!(icon.alpha_at(16, 1) > 200, "top of the ring must be opaque");
+}
+
+#[test]
+fn gauge_fill_tracks_the_percentage() {
+    // 12 o'clock is the arc start, so a small fill colours the top but not the
+    // bottom; a full one colours both.
+    let low = tray::gauge_icon(Some(10.0), Color::Green, 32);
+    let full = tray::gauge_icon(Some(100.0), Color::Green, 32);
+    let top_alpha = low.alpha_at(16, 1);
+    let bottom_alpha = low.alpha_at(16, 30);
+    assert!(top_alpha > 0, "top of a 10% ring is filled");
+    assert!(bottom_alpha > 0, "the dim track is still drawn");
+
+    // Compare colour saturation of the track vs the filled arc: the filled arc
+    // is the pure colour, the track is washed out toward grey.
+    let idx = |x: u32, y: u32| ((y * 32 + x) * 4) as usize;
+    let top_r = full.rgba[idx(16, 1)];
+    let low_top_r = low.rgba[idx(16, 1)];
+    assert_eq!(top_r, low_top_r, "same colour where both are filled");
+    let full_bottom_r = full.rgba[idx(16, 30)];
+    let low_bottom_r = low.rgba[idx(16, 30)];
+    assert!(
+        full_bottom_r < low_bottom_r,
+        "a full ring draws its own colour at the bottom ({full_bottom_r}) \
+         where a 10% ring draws the washed-out track ({low_bottom_r})"
+    );
+}
+
+#[test]
+fn gauge_with_no_reading_draws_only_the_dim_track() {
+    let icon = tray::gauge_icon(None, Color::Neutral, 32);
+    let idx = |x: u32, y: u32| ((y * 32 + x) * 4) as usize;
+    let top = icon.rgba[idx(16, 1)];
+    let bottom = icon.rgba[idx(16, 30)];
+    assert_eq!(top, bottom, "an unknown percentage fills nothing");
+}
+
+#[test]
+fn icon_for_uses_the_worst_percentage_and_colour() {
+    let usages = vec![u("a", Some(10.0), None), u("b", Some(90.0), None)];
+    assert_eq!(tray::worst_percent(&usages), Some(90.0));
+    let icon = tray::icon_for(&usages, 32);
+    assert_eq!(icon.rgba.len(), 32 * 32 * 4);
+    // 90% is red, so the filled arc is the red channel's 0xf8.
+    let idx = ((1 * 32 + 16) * 4) as usize;
+    assert_eq!(icon.rgba[idx], 0xf8, "worst account drives the colour");
+}
+
+#[test]
+fn menu_groups_each_account_over_several_lines() {
+    let mut w = u("work", Some(55.0), Some("plus"));
+    w.weekly_percent = Some(58.0);
+    w.resets_at = Some(1000 + 3600);
+    let entries = tray::menu_entries(&[w], 1000);
+
+    let accounts: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == tray::RowKind::Account)
+        .collect();
+    assert!(accounts.len() >= 2, "name and numbers get their own lines");
+
+    let name_line = &accounts[0].label;
+    assert!(name_line.contains("work"), "got {name_line}");
+    assert!(name_line.contains("plus"));
+    assert!(!name_line.contains("55.0"), "numbers are not crammed into the name line");
+
+    let gauge_line = &accounts[1].label;
+    assert!(gauge_line.contains("▓"), "has a text gauge: {gauge_line}");
+    assert!(gauge_line.contains("55.0"));
+    assert!(gauge_line.contains("58.0"));
+
+    // Every account row opens that account.
+    assert!(accounts.iter().all(|e| e.account == "work" && e.enabled));
+}
+
+#[test]
+fn menu_starts_with_a_header_and_has_a_separator() {
+    let entries = tray::menu_entries(&[u("work", Some(10.0), None)], 1000);
+    assert_eq!(entries[0].kind, tray::RowKind::Header);
+    assert!(!entries[0].enabled, "headers are inert");
+    assert!(entries.iter().any(|e| e.kind == tray::RowKind::Separator));
+}
+
+#[test]
+fn menu_marks_stale_accounts_in_their_header() {
+    let mut w = u("work", Some(55.0), Some("plus"));
+    w.stale = true;
+    w.checked_at = 1000;
+    let entries = tray::menu_entries(&[w], 1000 + 300);
+    let name_line = entries
+        .iter()
+        .find(|e| e.label.contains("work"))
+        .unwrap();
+    assert!(name_line.label.contains("stale"), "got {}", name_line.label);
+    let detail = entries
+        .iter()
+        .find(|e| e.label.contains("last checked"))
+        .expect("stale rows say how old they are");
+    assert!(detail.label.contains("5m ago"));
+}
+
+#[test]
+fn empty_account_list_says_so() {
+    let entries = tray::menu_entries(&[], 1000);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].label.to_lowercase().contains("no accounts"));
+}

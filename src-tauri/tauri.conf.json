@@ -9,10 +9,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Codex Dock",
         "width": 720,
         "height": 560,
-        "resizable": true
+        "minWidth": 520,
+        "minHeight": 420,
+        "resizable": true,
+        "visible": true
       }
     ],
     "trayIcon": {
@@ -23,9 +27,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "deb"],
+    "category": "Utility",
+    "shortDescription": "Multi-account usage dock for Codex",
+    "longDescription": "Lists every Codex account, launches each in its own window on one shared chat store, and reports per-account usage from a tray gauge.",
     "icon": [
-      "icons/tray-green.png"
-    ]
+      "icons/32x32.png",
+      "icons/48x48.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
   }
 }

@@ -19,6 +19,28 @@ make setup     # installs the Tauri CLI (network, once)
 make app       # build and run the desktop app
 ```
 
+To install it as a real desktop app — launcher entry, hicolor icons, and
+`codex-dock` on `PATH`, no root required:
+
+```bash
+make install     # -> ~/.local/bin/codex-dock + app launcher
+make autostart   # start it docked when you log in (optional)
+make uninstall   # removes the binary, launcher, and autostart entry
+```
+
+`make release` builds distributable bundles (`deb` + `AppImage`) instead.
+
+### Running as an installed app
+
+- **Closing the window docks it.** The tray keeps ticking and keeps the usage
+  numbers live; the process keeps running. Quit from the tray menu.
+- **One instance.** Launching the app again (the shortcut, the launcher, the
+  tray's *Open Codex Dock*) raises the running window instead of starting a
+  second tray icon.
+- **Left-click the tray** to open the dashboard; right-click for the menu.
+- **Opening an account** raises its Codex window if it is already open, and
+  only launches a new one otherwise.
+
 The headless CLI needs no GUI stack:
 
 ```bash
@@ -90,6 +112,16 @@ kept and labelled with their age — a value is never fabricated as 0%.
 
 Tray colour is the worst 5-hour percentage across accounts: green `< 60`,
 amber `< 85`, red otherwise, neutral when no account has a reading.
+
+The tray icon itself is a **ring gauge**, not a coloured dot: the filled arc is
+that same worst percentage, so you can read how close you are to the limit
+without opening anything. The window header shows the same ring, and each
+account gets filled bars on a shared scale.
+
+The menu repeats the layout in two lines per account — name and plan, then a
+ten-cell text gauge for the 5-hour and weekly windows — because native menus
+cannot draw a progress bar. Reset time, staleness, and credits follow on a
+third line when they exist.
 
 ## Layout
 
