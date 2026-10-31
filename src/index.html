@@ -84,10 +84,14 @@ async function render() {
   const byName = Object.fromEntries(usages.map(u => [u.account, u]));
   document.getElementById('accounts').innerHTML = accts.map(a => {
     const u = byName[a.name] || {};
+    const meta = a.loggedIn ? (u.plan || 'signed in') : 'signed out';
+    const age = u.stale
+      ? ` · <span class="meta">last checked ${u.age}</span>`
+      : (u.error ? ` · <span class="err">unavailable</span>` : '');
     return `<div class="acct">
       <div>
         <div class="name">${a.name}</div>
-        <div class="meta">${a.loggedIn ? (u.plan || 'signed in') : 'signed out'}
+        <div class="meta">${meta}${age}
           ${u.error ? `<span class="err"> · ${u.error}</span>` : ''}</div>
       </div>
       <button class="primary" onclick="invoke('open_window',{account:'${a.name}'})">Open</button>
@@ -95,6 +99,10 @@ async function render() {
         ${bar('5-hour', u.fiveHour)}
         ${bar('weekly', u.weekly)}
       </div>
+      ${u.lifetimeTokens ? `<div class="meta" style="grid-column:1/-1">
+        lifetime ${u.lifetimeTokens.toLocaleString()} tokens
+        · peak day ${u.peakDailyTokens.toLocaleString()}
+        · ${u.streakDays}-day streak</div>` : ''}
     </div>`;
   }).join('');
 }

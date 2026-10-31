@@ -1,50 +1,53 @@
 use crate::error::{Error, Result};
 
-/// LSP-style framing: `Content-Length: N\r\n\r\n` then N bytes of JSON.
+/// The app-server speaks newline-delimited JSON over stdio: one complete JSON
+/// object per line, no `Content-Length` header. Verified against
+/// `codex app-server` 0.164.0 — an LSP-style frame is accepted and then the
+/// connection is closed without a reply, which is why usage read as empty.
 pub fn encode_request(id: u64, method: &str) -> String {
-    let body = format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{{}}}}"#);
-    format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
+    encode_request_with(id, method, "{}")
 }
 
-fn frames(raw: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut rest = raw;
-    loop {
-        let Some(hdr_end) = rest.find("\r\n\r\n") else { break };
-        let header = &rest[..hdr_end];
-        let Some(len) = header
-            .lines()
-            .find_map(|l| l.strip_prefix("Content-Length: "))
-            .and_then(|v| v.trim().parse::<usize>().ok())
-        else {
-            break;
-        };
-        let body_start = hdr_end + 4;
-        if rest.len() < body_start + len {
-            break;
-        }
-        out.push(&rest[body_start..body_start + len]);
-        rest = &rest[body_start + len..];
+/// A request with an explicit params object, already serialised as JSON.
+pub fn encode_request_with(id: u64, method: &str, params: &str) -> String {
+    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":{params}}}\n")
+}
+
+/// A notification carries no id and expects no reply (`initialized`).
+pub fn encode_notification(method: &str) -> String {
+    format!("{{\"jsonrpc\":\"2.0\",\"method\":\"{method}\",\"params\":{{}}}}\n")
+}
+
+/// Parse one line of server output. `None` means the line is not a reply to
+/// `want_id` (another id, a notification, or noise the server logged).
+pub fn decode_line(line: &str, want_id: u64) -> Option<Result<serde_json::Value>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('{') {
+        return None;
     }
-    out
+    let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    if v.get("id").and_then(|i| i.as_u64()) != Some(want_id) {
+        return None;
+    }
+    if let Some(err) = v.get("error") {
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        return Some(Err(Error::Msg(format!("app-server error: {msg}"))));
+    }
+    Some(Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null)))
 }
 
+/// Scan a whole captured transcript for the reply to `want_id`.
 pub fn decode_response(raw: &str, want_id: u64) -> Result<serde_json::Value> {
     let mut saw_any = false;
-    for body in frames(raw) {
-        let v: serde_json::Value = match serde_json::from_str(body) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        saw_any = true;
-        if v.get("id").and_then(|i| i.as_u64()) != Some(want_id) {
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
             continue;
         }
-        if let Some(err) = v.get("error") {
-            let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-            return Err(Error::Msg(format!("app-server error: {msg}")));
+        saw_any = true;
+        if let Some(reply) = decode_line(trimmed, want_id) {
+            return reply;
         }
-        return Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null));
     }
     if saw_any {
         Err(Error::Msg(format!("no response for request id {want_id}")))

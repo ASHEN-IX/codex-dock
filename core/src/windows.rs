@@ -88,3 +88,55 @@ pub fn running(proc_root: &Path) -> Vec<WindowProc> {
     out.sort_by(|a, b| a.pid.cmp(&b.pid));
     out
 }
+
+/// Bring an existing Codex window for `account` to the front instead of
+/// spawning a duplicate. KDE Plasma on Wayland exposes window control through
+/// KWin's scripting D-Bus interface; on other desktops `wmctrl` is the
+/// fallback. Both are best-effort: failing to raise a window must not stop the
+/// caller, so the pid is returned either way.
+pub fn focus(account: &str) -> bool {
+    let Some(proc) = running(Path::new("/proc"))
+        .into_iter()
+        .find(|w| w.account == account)
+    else {
+        return false;
+    };
+    let pid = proc.pid;
+
+    // KWin scripting: one-shot script that activates the window for this pid.
+    let script = format!(
+        "for (const c of workspace.windowList()) {{ \
+           if (c.pid === {pid}) {{ workspace.activeWindow = c; break; }} }}"
+    );
+    if let Ok(path) = write_temp_script(&script) {
+        let path = path.to_string_lossy().to_string();
+        let loaded = std::process::Command::new("qdbus6")
+            .args([
+                "org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                &path,
+            ])
+            .output();
+        let ok = matches!(&loaded, Ok(o) if o.status.success());
+        if ok {
+            let _ = std::process::Command::new("qdbus6")
+                .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start"])
+                .output();
+            return true;
+        }
+    }
+
+    // Fallback for X11 desktops.
+    std::process::Command::new("wmctrl")
+        .args(["-i", "-a", &format!("0x{pid:x}")])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn write_temp_script(script: &str) -> Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!("codex-dock-focus-{}.js", std::process::id()));
+    std::fs::write(&path, script)?;
+    Ok(path)
+}
