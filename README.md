@@ -142,7 +142,7 @@ rather than your real `~/.codex`.
 make test     # cargo test -p codex-dock-core
 ```
 
-67 tests. The ones worth knowing about reproduce real traps: auth cycles,
+78 tests. The ones worth knowing about reproduce real traps: auth cycles,
 nested profiles, split stores, repair idempotency, `rollout_path` repointing,
 absent usage fields staying `None`, and stale readings never becoming zero.
 
