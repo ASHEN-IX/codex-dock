@@ -39,7 +39,11 @@ make uninstall   # removes the binary, launcher, and autostart entry
   second tray icon.
 - **Left-click the tray** to open the dashboard; right-click for the menu.
 - **Opening an account** raises its Codex window if it is already open, and
-  only launches a new one otherwise.
+  only launches a new one otherwise. Dashboard, tray, and CLI use the same
+  serialized launch path, including windows opened outside Dock.
+- **One row per account.** Profiles with the same signed-in account identity
+  appear once. A named profile takes precedence over a `default` alias; all
+  profile directories and credentials remain on disk.
 
 The headless CLI needs no GUI stack:
 

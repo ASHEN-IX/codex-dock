@@ -187,7 +187,7 @@ fn main() {
         Some("launch") => match args.get(1) {
             Some(name) => match windows::launch(&p, name) {
                 Ok(w) => {
-                    println!("launched {} (pid {})", w.account, w.pid);
+                    println!("opened {} (pid {})", w.account, w.pid);
                     0
                 }
                 Err(e) => {
@@ -201,7 +201,7 @@ fn main() {
             }
         },
         Some("running") => {
-            for w in windows::running(std::path::Path::new("/proc")) {
+            for w in windows::running_for(&p, std::path::Path::new("/proc")) {
                 println!("{}\t{}\tpid {}", w.account, w.user_data_dir.display(), w.pid);
             }
             0

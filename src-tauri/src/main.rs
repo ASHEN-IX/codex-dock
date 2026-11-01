@@ -389,14 +389,6 @@ fn open_window(account: String) -> Result<u32, String> {
     if !logged_in {
         return Err(format!("'{account}' is not signed in yet — sign in from Codex Dock first"));
     }
-    // Focus an existing window rather than spawning a duplicate.
-    if let Some(existing) = windows::running(std::path::Path::new("/proc"))
-        .into_iter()
-        .find(|w| w.account == account)
-    {
-        windows::focus(&account);
-        return Ok(existing.pid);
-    }
     windows::launch(&p, &account).map(|w| w.pid).map_err(|e| e.to_string())
 }
 
@@ -550,8 +542,8 @@ fn main() {
                     if let Some(account) = id.strip_prefix("open:") {
                         let p = Paths::real();
                         // Same rule as the window button: raise, never duplicate.
-                        if !windows::focus(account) {
-                            let _ = windows::launch(&p, account);
+                        if let Err(e) = windows::launch(&p, account) {
+                            eprintln!("codex-dock: could not open {account}: {e}");
                         }
                     }
                 })

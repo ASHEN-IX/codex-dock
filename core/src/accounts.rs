@@ -28,7 +28,7 @@ pub fn auth_info(path: &Path) -> (Option<String>, bool) {
     (id, logged_in)
 }
 
-pub fn list(p: &Paths) -> Result<Vec<Account>> {
+pub fn profiles(p: &Paths) -> Result<Vec<Account>> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(&p.profiles) {
         Ok(e) => e,
@@ -50,6 +50,33 @@ pub fn list(p: &Paths) -> Result<Vec<Account>> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+/// Display one row per signed-in identity. Preserve every profile on disk.
+pub fn list(p: &Paths) -> Result<Vec<Account>> {
+    let mut all = profiles(p)?;
+    // A named profile with private credentials is preferable to a default alias.
+    all.sort_by_key(|a| (a.name == "default", a.path.join("auth.json").is_symlink(), a.name.clone()));
+    let mut out: Vec<Account> = Vec::new();
+    for a in all {
+        let duplicate = a.account_id.as_ref().is_some_and(|id|
+            out.iter().any(|b| b.account_id.as_ref() == Some(id)));
+        if !duplicate { out.push(a); }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+pub fn canonical_name(p: &Paths, name: &str) -> Result<String> {
+    let all = profiles(p)?;
+    let account = all.iter().find(|a| a.name == name)
+        .ok_or_else(|| Error::Msg(format!("unknown account '{name}'")))?;
+    if let Some(id) = &account.account_id {
+        if let Some(canonical) = list(p)?.into_iter().find(|a| a.account_id.as_ref() == Some(id)) {
+            return Ok(canonical.name);
+        }
+    }
+    Ok(name.to_string())
 }
 
 fn valid_name(name: &str) -> bool {

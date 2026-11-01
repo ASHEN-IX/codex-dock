@@ -47,3 +47,25 @@ fn dot_entries_are_not_listed_as_accounts() {
     assert_eq!(got.len(), 1);
     std::fs::remove_dir_all(&t).ok();
 }
+
+#[test]
+fn default_alias_is_one_account_and_named_profile_wins() {
+    let t = tmp("alias");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    fixture(&t, "default", Some(r#"{"tokens":{"account_id":"same"}}"#));
+    fixture(&t, "work", Some(r#"{"tokens":{"account_id":"same"}}"#));
+    fixture(&t, "secondary", Some(r#"{"tokens":{"account_id":"other"}}"#));
+    assert_eq!(accounts::list(&p).unwrap().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["secondary", "work"]);
+    assert_eq!(accounts::canonical_name(&p, "default").unwrap(), "work");
+    assert_eq!(accounts::profiles(&p).unwrap().len(), 3);
+    std::fs::remove_dir_all(t).unwrap();
+}
+
+#[test]
+fn separate_signed_out_profiles_are_not_collapsed() {
+    let t = tmp("signed-out");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    fixture(&t, "first", None); fixture(&t, "second", None);
+    assert_eq!(accounts::list(&p).unwrap().len(), 2);
+    std::fs::remove_dir_all(t).unwrap();
+}

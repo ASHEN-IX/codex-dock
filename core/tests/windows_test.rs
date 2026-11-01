@@ -41,3 +41,37 @@ fn processes_without_our_flag_are_ignored() {
     assert!(windows::running(&root).is_empty());
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn ignores_electron_helpers_and_unrelated_apps_and_keeps_space_in_paths() {
+    let root = std::env::temp_dir().join(format!("cd-proc-filter-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (pid, cmd) in [
+        (1, "/usr/lib/chatgpt/ChatGPT\0--user-data-dir=/home/a user/.config/Codex-work\0"),
+        (2, "/usr/lib/chatgpt/ChatGPT\0--type=renderer\0--user-data-dir=/home/a user/.config/Codex-work\0"),
+        (3, "/usr/bin/other\0--user-data-dir=/home/a user/.config/Codex-work\0"),
+    ] {
+        let dir = root.join(pid.to_string()); std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cmdline"), cmd).unwrap();
+    }
+    let got = windows::running(&root);
+    assert_eq!(got.len(), 1); assert_eq!(got[0].pid, 1);
+    assert_eq!(got[0].user_data_dir.to_str().unwrap(), "/home/a user/.config/Codex-work");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_default_process_is_reused_for_the_same_named_account() {
+    let root = std::env::temp_dir().join(format!("cd-legacy-{}", std::process::id()));
+    let p = Paths::new(root.join(".codex"), root.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(p.profiles.join("work")).unwrap();
+    let auth = r#"{"tokens":{"account_id":"same"}}"#;
+    std::fs::write(p.base.join("auth.json"), auth).unwrap();
+    std::fs::write(p.profiles.join("work/auth.json"), auth).unwrap();
+    let proc = root.join("proc/42"); std::fs::create_dir_all(&proc).unwrap();
+    std::fs::write(proc.join("cmdline"), "/usr/lib/chatgpt/ChatGPT\0").unwrap();
+    let got = windows::running_for(&p, &root.join("proc"));
+    assert_eq!(got.len(), 1); assert_eq!(got[0].account, "work"); assert_eq!(got[0].pid, 42);
+    std::fs::remove_dir_all(root).unwrap();
+}

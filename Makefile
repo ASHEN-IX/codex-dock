@@ -38,9 +38,10 @@ release:
 # Installs the release binary under ~/.local, so no root is needed and the
 # launcher's Exec path stays valid.
 install:
-	$(CARGO) build --release -p codex-dock
+	$(CARGO) build --release -p codex-dock -p codex-dock-core
 	install -d $(PREFIX)/bin
 	install -m755 target/release/$(BIN) $(PREFIX)/bin/$(BIN)
+	install -m755 target/release/codex-dock-cli $(PREFIX)/bin/codex-dock-cli
 	install -d $(PREFIX)/share/icons/hicolor
 	for s in 32 48 64 128 256; do \
 	  install -d $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps; \
@@ -61,7 +62,7 @@ autostart:
 	@echo "autostart: $(AUTOSTART)"
 
 uninstall:
-	rm -f $(PREFIX)/bin/$(BIN) $(DESKTOP) $(AUTOSTART)
+	rm -f $(PREFIX)/bin/$(BIN) $(PREFIX)/bin/codex-dock-cli $(DESKTOP) $(AUTOSTART)
 	rm -f $(PREFIX)/share/icons/hicolor/*/apps/$(BIN).png
 	@echo "removed"
 
