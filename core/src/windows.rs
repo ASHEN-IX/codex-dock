@@ -27,7 +27,7 @@ pub fn command_for(p: &Paths, name: &str) -> Launcher {
 }
 
 pub fn user_data_dir(p: &Paths, name: &str) -> PathBuf {
-    p.home().join(".config").join(format!("Codex-{name}"))
+    p.user_data_dir(name)
 }
 
 pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {

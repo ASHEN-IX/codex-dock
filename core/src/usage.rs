@@ -1,5 +1,8 @@
 use crate::paths::Paths;
 use std::collections::HashMap;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Usage {
@@ -167,6 +170,10 @@ pub fn retain_last(fresh: Usage, previous: Option<&Usage>) -> Usage {
 }
 
 /// A 60s cache shared by the window and the tray so they cannot disagree.
+///
+/// `Shared` behind an `Arc` because the lock must never be held across a read:
+/// one app-server round trip takes seconds, and a refresh of three accounts
+/// would freeze the window and the tray tick for the whole time.
 #[derive(Debug)]
 pub struct Cache {
     ttl: i64,
@@ -194,6 +201,86 @@ impl Cache {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+}
+
+/// A cache that can be shared across threads, and the single place a reading is
+/// refreshed. Holding the lock only to look up or store a value keeps the UI
+/// responsive while an account is slow to answer.
+#[derive(Debug)]
+pub struct Shared {
+    inner: Mutex<Cache>,
+    /// Serialises refreshes of one account so the window and the tray tick
+    /// cannot both spawn an app-server for it.
+    refreshes: Mutex<HashMap<String, Arc<(Mutex<bool>, Condvar)>>>,
+}
+
+impl Shared {
+    pub fn new(ttl: i64) -> Shared {
+        Shared { inner: Mutex::new(Cache::new(ttl)), refreshes: Mutex::new(HashMap::new()) }
+    }
+
+    /// A reading from the last `ttl` seconds, if one was recorded.
+    pub fn get(&self, account: &str, now: i64) -> Option<Usage> {
+        self.lock().get(account, now).cloned()
+    }
+
+    /// The last reading of any age, fresh or retained.
+    pub fn last(&self, account: &str) -> Option<Usage> {
+        self.lock().last(account).cloned()
+    }
+
+    /// Serve from the cache when fresh, otherwise read and store. Concurrent
+    /// callers for the same account wait for the first one instead of each
+    /// spawning their own app-server.
+    pub fn get_or_read(&self, p: &Paths, account: &str, now_now: impl Fn() -> i64) -> Usage {
+        let now = now_now();
+        if let Some(hit) = self.get(account, now) {
+            return hit;
+        }
+        let gate = {
+            let mut map = self.refreshes.lock().unwrap_or_else(|e| e.into_inner());
+            Arc::clone(map.entry(account.to_string()).or_default())
+        };
+        let (busy, cv) = &*gate;
+        let mut started = busy.lock().unwrap_or_else(|e| e.into_inner());
+        while *started {
+            // Another thread is already reading: wait, then re-check the cache.
+            let (guard, _) = cv
+                .wait_timeout(started, Duration::from_secs(30))
+                .unwrap_or_else(|e| e.into_inner());
+            started = guard;
+            if !*started {
+                break;
+            }
+        }
+        let fresh_now = now_now();
+        if let Some(hit) = self.get(account, fresh_now) {
+            return hit;
+        }
+        *started = true;
+        drop(started);
+
+        let previous = self.last(account);
+        let fresh = read(p, account, fresh_now);
+        let kept = retain_last(fresh, previous.as_ref());
+        self.lock().put(kept.clone());
+
+        {
+            let mut started = busy.lock().unwrap_or_else(|e| e.into_inner());
+            *started = false;
+        }
+        cv.notify_all();
+        kept
+    }
+
+    /// Drop an account's cached reading so the next refresh is a real one.
+    pub fn forget(&self, account: &str) {
+        self.lock().entries.remove(account);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Cache> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -255,10 +342,9 @@ pub fn read(p: &Paths, account: &str, now: i64) -> Usage {
 /// server speaks newline-delimited JSON on stdio, which is the transport the
 /// Codex clients themselves use.
 fn proxy_request(home: &std::path::Path) -> std::result::Result<String, String> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::process::{Command, Stdio};
+    use std::io::Write;
 
-    let mut child = Command::new("codex")
+    let mut child = Command::new(crate::tool::codex())
         .args(["app-server"])
         .env("CODEX_HOME", home)
         .stdin(Stdio::piped())
@@ -294,26 +380,14 @@ fn proxy_request(home: &std::path::Path) -> std::result::Result<String, String> 
 
     // Read until every id we asked for has been seen, so a slow first reply
     // cannot truncate the rest. `usage/read` is the slowest and optional.
-    let stdout = child.stdout.take().ok_or("no stdout")?;
-    let mut reader = BufReader::new(stdout);
-    let mut transcript = String::new();
-    let mut seen = [false; 5];
-    let mut line = String::new();
-    while let Ok(n) = reader.read_line(&mut line) {
-        if n == 0 {
-            break;
+    let transcript = match read_replies(&mut child, &[2, 3, 4], REPLY_TIMEOUT) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
         }
-        transcript.push_str(&line);
-        for id in 2..=4usize {
-            if !seen[id] && line.contains(&format!("\"id\":{id}")) {
-                seen[id] = true;
-            }
-        }
-        line.clear();
-        if seen[2] && seen[3] && seen[4] {
-            break;
-        }
-    }
+    };
     let _ = child.kill();
     let _ = child.wait();
 
@@ -321,4 +395,64 @@ fn proxy_request(home: &std::path::Path) -> std::result::Result<String, String> 
         return Err("app-server returned no output".to_string());
     }
     Ok(transcript)
+}
+
+/// How long to wait for the replies. `account/usage/read` is the slowest and
+/// genuinely optional: a timeout still leaves the rate-limit numbers usable.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Read stdout on a worker thread while watching the clock, so a wedged
+/// app-server cannot hang the caller (and, with it, the tray tick) forever.
+fn read_replies(
+    child: &mut Child,
+    want: &[u64],
+    timeout: Duration,
+) -> std::result::Result<String, String> {
+    use std::io::{BufRead, BufReader};
+
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if tx.send(line.clone()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let deadline = Instant::now() + timeout;
+    let mut transcript = String::new();
+    let mut seen: Vec<u64> = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            // Keep whatever arrived: rate limits may be complete even when the
+            // slower usage summary is not.
+            if transcript.trim().is_empty() {
+                return Err("app-server did not answer in time".to_string());
+            }
+            return Ok(transcript);
+        }
+        let line = match rx.recv_timeout(left) {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        transcript.push_str(&line);
+        for id in want {
+            if !seen.contains(id) && line.contains(&format!("\"id\":{id}")) {
+                seen.push(*id);
+            }
+        }
+        if want.iter().all(|id| seen.contains(id)) {
+            return Ok(transcript);
+        }
+    }
 }

@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use codex_dock_core::login::{parse_device_code, strip_ansi};
 use codex_dock_core::{accounts, store, tray, usage, windows, Paths};
+use std::sync::Mutex;
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// One cache for the whole app, shared by the window commands and the tray
 /// thread so the two can never show different numbers for the same account.
-struct UsageCache(std::sync::Mutex<usage::Cache>);
+struct UsageCache(usage::Shared);
 
 const CACHE_TTL_SECS: i64 = 60;
 
@@ -22,11 +24,289 @@ const TRAY_ICON_SIZE: u32 = 32;
 /// the app's home, and a dock that disappears should stop reporting usage.
 const MAIN_WINDOW: &str = "main";
 
+/// A sign-in in progress, keyed by account. Device-code login takes as long as
+/// it takes a human to approve it, so the window polls this instead of the
+/// command blocking for minutes.
+#[derive(Default)]
+struct LoginState(Mutex<std::collections::HashMap<String, Login>>);
+
+struct Login {
+    code: Option<String>,
+    url: Option<String>,
+    done: bool,
+    error: Option<String>,
+    /// The `codex login` child, so Cancel can stop it. Without this the child
+    /// outlives the dialog and the profile sits with no auth.json until it
+    /// gives up.
+    pid: Option<u32>,
+}
+
+impl Login {
+    fn starting() -> Login {
+        Login { code: None, url: None, done: false, error: None, pid: None }
+    }
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Create an account, point it at the shared store, and start device sign-in.
+#[tauri::command]
+fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::Value, String> {
+    let p = Paths::real();
+    let account = accounts::create(&p, &name, clone_from.as_deref()).map_err(|e| e.to_string())?;
+    store::link_profile(&p, &name).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "name": account.name,
+        "loggedIn": account.logged_in,
+    }))
+}
+
+/// Spawn `codex login --device-auth` under the account's CODEX_HOME and record
+/// the code it prints. The child keeps running until the user approves, so its
+/// completion is what flips the account to signed in.
+///
+/// Returns immediately: the wait happens on a worker thread, because blocking
+/// here would freeze the window for as long as the approval takes.
+#[tauri::command]
+fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
+    let p = Paths::real();
+    let home = p.profiles.join(&name);
+    if !home.is_dir() {
+        return Err(format!("account '{name}' does not exist"));
+    }
+    {
+        let state = app.state::<LoginState>();
+        let mut map = state.0.lock().map_err(|_| "login state poisoned".to_string())?;
+        // Adopt the in-flight sign-in instead of starting a second one: the
+        // dialog can be reopened, and two `codex login` children would race for
+        // the same auth.json.
+        let pending = map.get(&name).map(|l| !l.done).unwrap_or(false);
+        if pending {
+            return Ok(());
+        }
+        map.insert(name.clone(), Login::starting());
+    }
+    std::thread::spawn(move || run_login(app, name, home));
+    Ok(())
+}
+
+fn run_login(app: tauri::AppHandle, name: String, home: std::path::PathBuf) {
+    use std::io::{BufRead, BufReader};
+
+    // `codex login` rewrites auth.json through a symlink. The live layout links
+    // ~/.codex/auth.json -- and with it the `default` profile -- at
+    // work/auth.json, so signing in here without this step would replace another
+    // account's credentials.
+    let backup = Paths::real().backup_dir(&now().to_string());
+    if let Err(e) = accounts::materialise_auth(&home, &backup) {
+        set_login_error(&app, &name, format!("could not protect the existing credentials: {e}"));
+        return;
+    }
+
+    let child = std::process::Command::new(codex_dock_core::tool::codex())
+        .args(["login", "--device-auth"])
+        .env("CODEX_HOME", &home)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_API_KEY")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            set_login_error(&app, &name, format!("could not run codex login: {e}"));
+            return;
+        }
+    };
+    set_login_pid(&app, &name, Some(child.id()));
+
+    let Some(stdout) = child.stdout.take() else {
+        set_login_error(&app, &name, "no output from codex login".to_string());
+        return;
+    };
+    let stderr = child.stderr.take();
+
+    // Drain stderr on its own thread *first*: reading stdout to EOF before
+    // touching stderr deadlocks as soon as the child fills the 64 KB stderr
+    // pipe, which is exactly what happens when login fails verbosely.
+    let err_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let err_sink = std::sync::Arc::clone(&err_text);
+    if let Some(err) = stderr {
+        std::thread::spawn(move || {
+            let sink = err_sink;
+            for line in BufReader::new(err).lines().map_while(|l| l.ok()) {
+                if let Ok(mut s) = sink.lock() {
+                    s.push_str(&line);
+                    s.push('\n');
+                }
+            }
+        });
+    }
+
+    // Read the banner so the window can show the code, then keep draining so the
+    // pipe cannot fill and stall the child.
+    let reader = BufReader::new(stdout);
+    let mut seen = String::new();
+    let mut captured = None;
+    for line in reader.lines().map_while(|l| l.ok()) {
+        seen.push_str(&line);
+        seen.push('\n');
+        if captured.is_none() {
+            let (code, url) = parse_device_code(&seen);
+            if code.is_some() {
+                captured = Some((code.clone(), url.clone()));
+                set_login_code(&app, &name, code, url);
+            }
+        }
+    }
+
+    let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+    let (_, logged_in) = accounts::auth_info(&home.join("auth.json"));
+    // A cancelled or failed sign-in leaves the profile with no auth.json at all,
+    // because login deletes it as it starts. Put the old credentials back so the
+    // account is not silently signed out by opening the dialog.
+    let restored = if ok && logged_in {
+        false
+    } else {
+        accounts::restore_auth(&home, &backup).unwrap_or(false)
+    };
+    let succeeded = (ok && logged_in) || restored;
+    let mut diagnostics = seen;
+    if let Ok(s) = err_text.lock() {
+        diagnostics.push_str(&s);
+    }
+
+    let state = app.state::<LoginState>();
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some(login) = guard.get_mut(&name) {
+        login.done = true;
+        login.pid = None;
+        login.error = if succeeded {
+            None
+        } else if diagnostics.trim().is_empty() {
+            Some("sign-in did not complete".to_string())
+        } else {
+            Some(last_meaningful_line(&diagnostics))
+        };
+    }
+    drop(guard);
+    // A new credential means the numbers belong to a different account now.
+    app.state::<UsageCache>().0.forget(&name);
+}
+
+fn set_login_pid(app: &tauri::AppHandle, name: &str, pid: Option<u32>) {
+    let state = app.state::<LoginState>();
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some(login) = guard.get_mut(name) {
+        login.pid = pid;
+    }
+}
+
+/// Stop a sign-in the user backed out of, and put the old credentials back.
+///
+/// Without this, Cancel only stopped the polling: the child kept waiting for an
+/// approval that would never come, with the profile's auth.json already deleted
+/// by `codex login`. The worker restores the snapshot when it sees the child
+/// exit non-zero, so signalling is enough.
+#[tauri::command]
+fn cancel_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
+    let pid = {
+        let state = app.state::<LoginState>();
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        guard.get(&name).and_then(|l| l.pid)
+    };
+    if let Some(pid) = pid {
+        // SIGTERM, not SIGKILL: the CLI gets to clean up and exit non-zero,
+        // which is what triggers the restore in the worker.
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    Ok(())
+}
+
+fn set_login_code(app: &tauri::AppHandle, name: &str, code: Option<String>, url: Option<String>) {
+    let state = app.state::<LoginState>();
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some(login) = guard.get_mut(name) {
+        login.code = code;
+        login.url = url;
+    }
+}
+
+fn set_login_error(app: &tauri::AppHandle, name: &str, error: String) {
+    let state = app.state::<LoginState>();
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some(login) = guard.get_mut(name) {
+        login.done = true;
+        login.error = Some(error);
+    }
+}
+
+fn last_meaningful_line(s: &str) -> String {
+    strip_ansi(s)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('─'))
+        .last()
+        .unwrap_or_else(|| "sign-in did not complete".to_string())
+}
+
+/// Where the window polls for the code and the outcome.
+#[tauri::command]
+fn login_status(name: String, state: tauri::State<'_, LoginState>) -> serde_json::Value {
+    let map = match state.0.lock() {
+        Ok(m) => m,
+        Err(p) => p.into_inner(),
+    };
+    match map.get(&name) {
+        Some(l) => serde_json::json!({
+            "pending": true,
+            "code": l.code,
+            "url": l.url,
+            "done": l.done,
+            "error": l.error,
+            "running": l.pid.is_some(),
+        }),
+        None => serde_json::json!({ "pending": false }),
+    }
+}
+
+/// Remove an account: its profile and its Electron window data both move to the
+/// backup directory, never to the bin.
+#[tauri::command]
+fn delete_account(name: String) -> Result<serde_json::Value, String> {
+    let p = Paths::real();
+    let stamp = now().to_string();
+    let bak = p.backup_dir(&stamp);
+    let moved = accounts::remove(&p, &name, &bak).map_err(|e| e.to_string())?;
+    accounts::remove_user_data_dir(&p, &name, &bak).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "moved": moved.display().to_string(),
+        "backup": bak.display().to_string(),
+    }))
 }
 
 fn show_dashboard(app: &tauri::AppHandle) {
@@ -69,18 +349,13 @@ fn store_status() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn usage_all(state: tauri::State<'_, UsageCache>) -> serde_json::Value {
     let p = Paths::real();
-    let mut cache = match state.0.lock() {
-        Ok(c) => c,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let rows: Vec<_> = accounts::list(&p)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| {
-            let u = cached_usage(&p, &mut cache, &a.name);
-            usage_json(&u, now())
-        })
-        .collect();
+    // No lock is held across the reads: with the cache lock held, three slow
+    // app-server round trips would freeze the window for half a minute.
+    let mut rows = Vec::new();
+    for account in accounts::list(&p).unwrap_or_default() {
+        let u = state.0.get_or_read(&p, &account.name, now);
+        rows.push(usage_json(&u, now()));
+    }
     serde_json::json!(rows)
 }
 
@@ -102,23 +377,18 @@ fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
     })
 }
 
-/// Serve from the cache when fresh, otherwise refresh and retain the last good
-/// reading if the refresh fails (never a fabricated 0%).
-fn cached_usage(p: &Paths, cache: &mut usage::Cache, account: &str) -> usage::Usage {
-    let now = now();
-    if let Some(hit) = cache.get(account, now) {
-        return hit.clone();
-    }
-    let previous = cache.last(account).cloned();
-    let fresh = usage::read(p, account, now);
-    let kept = usage::retain_last(fresh, previous.as_ref());
-    cache.put(kept.clone());
-    kept
-}
-
 #[tauri::command]
 fn open_window(account: String) -> Result<u32, String> {
     let p = Paths::real();
+    // Opening a signed-out profile only shows Codex's own sign-in screen under a
+    // name that reads as ready.
+    let logged_in = accounts::list(&p)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|a| a.name == account && a.logged_in);
+    if !logged_in {
+        return Err(format!("'{account}' is not signed in yet — sign in from Codex Dock first"));
+    }
     // Focus an existing window rather than spawning a duplicate.
     if let Some(existing) = windows::running(std::path::Path::new("/proc"))
         .into_iter()
@@ -148,18 +418,12 @@ fn refresh_tray(
     rebuild_menu: &dyn Fn() -> tauri::Result<tauri::menu::Menu<tauri::Wry>>,
 ) {
     let p = Paths::real();
-    let usages: Vec<_> = {
-        let state = app.state::<UsageCache>();
-        let mut cache = match state.0.lock() {
-            Ok(c) => c,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        accounts::list(&p)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|a| cached_usage(&p, &mut cache, &a.name))
-            .collect()
-    };
+    let cache = &app.state::<UsageCache>().0;
+    let usages: Vec<_> = accounts::list(&p)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| cache.get_or_read(&p, &a.name, now))
+        .collect();
 
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         // A gauge ring filled to the worst percentage: the colour alone said
@@ -188,26 +452,24 @@ fn main() {
     }));
 
     builder
-        .manage(UsageCache(std::sync::Mutex::new(usage::Cache::new(CACHE_TTL_SECS))))
+        .manage(UsageCache(usage::Shared::new(CACHE_TTL_SECS)))
+        .manage(LoginState::default())
         .setup(|app| {
             // Rebuilt on every refresh: a menu built once would show stale limits.
             let app_for_menu = app.handle().clone();
             let build_menu = move || -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 let menu = tauri::menu::Menu::new(&app_for_menu)?;
                 let p = Paths::real();
-                let usages: Vec<_> = {
-                    let state = app_for_menu.state::<UsageCache>();
-                    let mut cache = match state.0.lock() {
-                        Ok(c) => c,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    accounts::list(&p)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|a| cached_usage(&p, &mut cache, &a.name))
-                        .collect()
-                };
-                for (i, entry) in tray::menu_entries(&usages, now()).into_iter().enumerate() {
+                let accounts = accounts::list(&p).unwrap_or_default();
+                let cache = &app_for_menu.state::<UsageCache>().0;
+                let usages: Vec<_> =
+                    accounts.iter().map(|a| cache.get_or_read(&p, &a.name, now)).collect();
+                let signed_in: Vec<String> =
+                    accounts.iter().filter(|a| a.logged_in).map(|a| a.name.clone()).collect();
+                let is_in = |name: &str| signed_in.iter().any(|n| n == name);
+                for (i, entry) in
+                    tray::menu_entries_with(&usages, now(), &is_in).into_iter().enumerate()
+                {
                     match entry.kind {
                         tray::RowKind::Separator => {
                             menu.append(&tauri::menu::PredefinedMenuItem::separator(
@@ -248,6 +510,13 @@ fn main() {
                 )?)?;
                 menu.append(&tauri::menu::MenuItem::with_id(
                     &app_for_menu,
+                    "add-account",
+                    "Add account…",
+                    true,
+                    None::<&str>,
+                )?)?;
+                menu.append(&tauri::menu::MenuItem::with_id(
+                    &app_for_menu,
                     "quit",
                     "Quit Codex Dock",
                     true,
@@ -269,6 +538,13 @@ fn main() {
                     }
                     if id == "open-dock" {
                         show_dashboard(_app);
+                        return;
+                    }
+                    if id == "add-account" {
+                        show_dashboard(_app);
+                        if let Some(w) = _app.get_webview_window(MAIN_WINDOW) {
+                            let _ = w.emit("add-account", ());
+                        }
                         return;
                     }
                     if let Some(account) = id.strip_prefix("open:") {
@@ -314,6 +590,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             account_list,
+            add_account,
+            start_login,
+            login_status,
+            cancel_login,
+            delete_account,
             store_status,
             usage_all,
             open_window,

@@ -77,8 +77,24 @@
   button:active { transform: translateY(.5px); }
   button.ghost { background: transparent; color: var(--dim); border-color: transparent; }
   button.ghost:hover { color: var(--text); background: var(--panel-2); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary {
+    background: rgba(61,220,151,.13);
+    border-color: rgba(61,220,151,.32);
+    color: #9df0c6;
+  }
+  button.primary:hover { background: rgba(61,220,151,.2); border-color: rgba(61,220,151,.5); }
+  button.danger { color: var(--red); border-color: rgba(242,97,92,.34); background: rgba(242,97,92,.1); }
+  button.danger:hover { background: rgba(242,97,92,.18); border-color: rgba(242,97,92,.55); }
+  button.mini {
+    font-size: 11px; padding: 3px 8px; border-radius: 6px;
+    background: transparent; border-color: transparent; color: var(--faint);
+  }
+  button.mini:hover { color: var(--red); background: rgba(242,97,92,.08); }
 
   main { padding: 16px 20px 24px; }
+
+  .actions { display: flex; gap: 6px; align-items: center; }
 
   .acct {
     display: grid;
@@ -162,6 +178,62 @@
     align-items: center;
   }
   .banner span { flex: 1; }
+
+  /* --- add / sign in / delete --- */
+  dialog {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 13px;
+    padding: 0;
+    width: 360px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+  .dlg { padding: 18px 20px; }
+  .dlg h2 { font-size: 13.5px; font-weight: 600; margin: 0 0 4px; }
+  .dlg p { font-size: 11.5px; color: var(--dim); margin: 0 0 14px; line-height: 1.55; }
+  .dlg label { display: block; font-size: 11px; color: var(--dim); margin: 12px 0 5px; }
+  .dlg input, .dlg select {
+    width: 100%; font: inherit; font-size: 12.5px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+    padding: 7px 10px; outline: none;
+  }
+  .dlg input:focus, .dlg select:focus { border-color: #3a424d; }
+  .dlg .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+  .code {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 19px; letter-spacing: .14em; text-align: center;
+    padding: 13px; margin: 12px 0 10px;
+    background: var(--bg); border: 1px dashed var(--line); border-radius: 8px;
+    user-select: text;
+  }
+  .code.waiting { color: var(--faint); font-size: 12px; letter-spacing: 0; font-family: inherit; }
+  .dlg a { color: var(--green); font-size: 11.5px; word-break: break-all; text-decoration: none; }
+  .dlg a:hover { text-decoration: underline; }
+  .dlg .note { font-size: 11px; color: var(--faint); margin-top: 10px; line-height: 1.5; }
+  .dlg .hint { font-size: 10.5px; color: var(--faint); margin-top: 4px; }
+  .dlg .hint.bad { color: var(--red); }
+  .steps { counter-reset: step; margin: 0 0 2px; padding: 0; list-style: none; }
+  .steps li {
+    position: relative; padding-left: 22px; margin-bottom: 6px;
+    font-size: 11.5px; color: var(--dim); line-height: 1.5;
+  }
+  .steps li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 1px;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--dim); font-size: 9.5px; text-align: center; line-height: 14px;
+  }
+  .steps li.done::before { content: "✓"; color: var(--green); border-color: rgba(61,220,151,.35); }
+  .prog { height: 3px; border-radius: 99px; background: #1d2229; overflow: hidden; margin: 12px 0 0; }
+  .prog > i { display: block; height: 100%; width: 34%; border-radius: 99px;
+    background: var(--green); animation: slide 1.5s ease-in-out infinite; }
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+  }
 </style>
 </head>
 <body>
@@ -170,6 +242,7 @@
   <h1>Codex Dock</h1>
   <span class="pill" id="store">checking…</span>
   <div class="spacer"></div>
+  <button class="ghost" id="add">Add account</button>
   <button class="ghost" id="repair">Repair store</button>
   <button class="ghost" id="refresh">Refresh</button>
 </header>
@@ -177,6 +250,49 @@
   <div id="banner"></div>
   <div id="accounts"></div>
 </main>
+
+<dialog id="addDlg">
+  <form class="dlg" id="addForm" method="dialog">
+    <h2>Add an account</h2>
+    <p>A new profile gets its own sign-in but shares this machine's chats.</p>
+    <label for="newName">Name</label>
+    <input id="newName" name="name" placeholder="personal" autocomplete="off" spellcheck="false" />
+    <label for="newClone">Copy settings from</label>
+    <select id="newClone" name="clone"><option value="">Nothing — start clean</option></select>
+    <div class="row">
+      <button type="button" class="ghost" data-close>Cancel</button>
+      <button type="submit" class="primary" id="addGo">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="loginDlg">
+  <div class="dlg">
+    <h2>Sign in to <span id="loginName"></span></h2>
+    <ol class="steps">
+      <li id="stepOpen">Open the link and sign in to the account you want here</li>
+      <li id="stepCode">Enter the one-time code below</li>
+    </ol>
+    <div class="code waiting" id="loginCode">starting…</div>
+    <a id="loginUrl" href="#" hidden></a>
+    <div class="prog" id="loginProg"><i></i></div>
+    <div class="row">
+      <button type="button" class="ghost" data-cancel-login>Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="askDlg">
+  <div class="dlg">
+    <h2 id="askTitle">Remove account</h2>
+    <p id="askBody"></p>
+    <div class="note" id="askNote"></div>
+    <div class="row">
+      <button type="button" class="ghost" data-close>Cancel</button>
+      <button type="button" class="danger" id="askGo">Remove</button>
+    </div>
+  </div>
+</dialog>
 <script>
 const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
 const $ = (id) => document.getElementById(id);
@@ -255,15 +371,19 @@ async function render() {
 
   if (!accts.length) {
     $('accounts').innerHTML = `<div class="empty">No accounts yet.<br>
-      Add one with <code>codex-profile add &lt;name&gt;</code>, then refresh.</div>`;
+      Use <b>Add account</b> above to create one and sign in.</div>`;
     return;
   }
 
   $('accounts').innerHTML = accts.map((a) => {
     const u = byName[a.name] || {};
+    // A profile can hold credentials the server no longer accepts (revoked or
+    // expired session). Offering "Sign in" again is the only way out.
+    const needsLogin = !a.loggedIn || (!!u.error && /authentication required/i.test(u.error));
     const live = a.loggedIn && u.fiveHour != null && !u.error && !u.stale;
     const bits = [];
     if (!a.loggedIn) bits.push('<span class="warn">signed out</span>');
+    else if (needsLogin) bits.push('<span class="warn">sign-in expired</span>');
     else bits.push(esc(u.plan || 'signed in'));
     if (u.stale) bits.push(`<span class="meta sep">last checked ${esc(u.age || 'a while ago')}</span>`);
     else if (u.error) bits.push('<span class="meta sep err">unavailable</span>');
@@ -287,9 +407,13 @@ async function render() {
           <span class="dot ${live ? 'live' : ''}"></span>
           <span class="name">${esc(a.name)}</span>
         </div>
-        <div class="meta" style="margin-top:2px">${bits.join('')}</div>
+      <div class="meta" style="margin-top:2px">${bits.join('')}</div>
       </div>
-      <button data-account="${esc(a.name)}">Open</button>
+      <div class="actions">
+        ${needsLogin ? `<button data-login="${esc(a.name)}" class="primary">Sign in</button>` : ''}
+        ${a.loggedIn && !needsLogin ? `<button data-account="${esc(a.name)}">Open</button>` : ''}
+        <button class="mini" data-delete="${esc(a.name)}" title="Remove account">Remove</button>
+      </div>
       <div class="bars">
         ${bar('5-hour', u.fiveHour)}
         ${bar('weekly', u.weekly)}
@@ -307,7 +431,196 @@ async function render() {
       b.disabled = false;
     });
   });
+
+  $('accounts').querySelectorAll('button[data-login]').forEach((b) => {
+    b.addEventListener('click', () => beginLogin(b.dataset.login));
+  });
+
+  $('accounts').querySelectorAll('button[data-delete]').forEach((b) => {
+    b.addEventListener('click', () => removeAccount(b.dataset.delete));
+  });
 }
+
+/* --- add, sign in, remove --- */
+
+let loginPoll = null;
+
+function openAdd() {
+  const sel = $('newClone');
+  const names = [...$('accounts').querySelectorAll('.name')].map((n) => n.textContent);
+  sel.innerHTML = '<option value="">Nothing — start clean</option>' +
+    names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  $('newName').value = '';
+  $('addDlg').showModal();
+  $('newName').focus();
+}
+
+$('add').addEventListener('click', openAdd);
+
+$('addForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const name = $('newName').value.trim();
+  if (!name) { $('newName').focus(); return; }
+  const go = $('addGo');
+  go.disabled = true;
+  go.textContent = 'Creating…';
+  try {
+    await invoke('add_account', { name, cloneFrom: $('newClone').value || null });
+    $('addDlg').close();
+    await refresh();
+    beginLogin(name);
+  } catch (e) {
+    banner(`<div class="banner"><span>Could not add "${esc(name)}": ${esc(e)}</span></div>`);
+  }
+  go.disabled = false;
+  go.textContent = 'Create';
+});
+
+async function beginLogin(name) {
+  $('loginName').textContent = name;
+  const code = $('loginCode');
+  const link = $('loginUrl');
+  const prog = $('loginProg');
+  code.className = 'code waiting';
+  code.textContent = 'starting…';
+  link.hidden = true;
+  link.textContent = '';
+  $('stepOpen').className = '';
+  $('stepCode').className = '';
+  prog.hidden = false;
+  $('loginDlg').dataset.account = name;
+  $('loginDlg').showModal();
+
+  try {
+    await invoke('start_login', { name });
+  } catch (e) {
+    code.textContent = String(e);
+    prog.hidden = true;
+    return;
+  }
+
+  clearInterval(loginPoll);
+  loginPoll = setInterval(async () => {
+    let st;
+    try { st = await invoke('login_status', { name }); }
+    catch { return; }
+    if (st.url && link.hidden) {
+      link.href = st.url;
+      link.textContent = st.url;
+      link.hidden = false;
+    }
+    if (st.code) {
+      code.className = 'code';
+      code.textContent = st.code;
+      $('stepOpen').className = 'done';
+    }
+    if (st.done) {
+      clearInterval(loginPoll);
+      loginPoll = null;
+      prog.hidden = true;
+      // A finished sign-in is not a closed dialog: show the outcome, then let
+      // the user dismiss it. Closing on success hid the code before it could
+      // be read if the approval landed while the dialog was still open.
+      if (st.error) {
+        $('stepCode').className = 'done';
+        code.className = 'code waiting';
+        code.textContent = 'Sign-in failed';
+        banner(`<div class="banner"><span>Sign-in for "${esc(name)}" failed: ${esc(st.error)}</span></div>`);
+      } else {
+        $('stepCode').className = 'done';
+        loginDlgClose();
+        banner(`<div class="banner" style="border-color:rgba(61,220,151,.3);
+          background:rgba(61,220,151,.06);color:#a9f0cd">
+          <span>"${esc(name)}" is signed in.</span></div>`);
+      }
+      refresh();
+    }
+  }, 1000);
+}
+
+function loginDlgClose() {
+  clearInterval(loginPoll);
+  loginPoll = null;
+  $('loginDlg').close();
+}
+
+/* Cancel is not just "stop looking": the login child keeps waiting for an
+   approval that will never come, with the profile's auth.json already deleted.
+   Ask the shell to stop it, which restores the previous credentials. */
+async function cancelLogin() {
+  const name = $('loginDlg').dataset.account;
+  loginDlgClose();
+  if (!name) return;
+  try { await invoke('cancel_login', { name }); } catch { /* already gone */ }
+  banner('<div class="banner" style="border-color:#2a2f37;background:#14171c;color:var(--dim)">' +
+    '<span>Sign-in cancelled. The previous credentials were kept.</span></div>');
+  refresh();
+}
+
+/* A styled replacement for window.confirm(), which wry does not implement in
+   its WebKitGTK build: `confirm()` either returns undefined or does nothing, so
+   Remove looked dead. */
+let askResolve = null;
+
+function ask({ title, body, note, action, danger = true }) {
+  $('askTitle').textContent = title;
+  $('askBody').textContent = body;
+  $('askNote').textContent = note || '';
+  const go = $('askGo');
+  go.textContent = action;
+  go.className = danger ? 'danger' : 'primary';
+  $('askDlg').showModal();
+  return new Promise((resolve) => { askResolve = resolve; });
+}
+
+$('askGo').addEventListener('click', () => {
+  $('askDlg').close();
+  const r = askResolve; askResolve = null;
+  if (r) r(true);
+});
+
+$('askDlg').addEventListener('close', () => {
+  const r = askResolve; askResolve = null;
+  if (r) r(false);
+});
+
+async function removeAccount(name) {
+  const ok = await ask({
+    title: `Remove “${name}”?`,
+    body: 'Its profile and window data move to a backup folder. Nothing is deleted.',
+    note: 'Chats live in the shared store and stay where they are. You can sign this account back in later.',
+    action: 'Remove',
+  });
+  if (!ok) return;
+  try {
+    const r = await invoke('delete_account', { name });
+    banner(`<div class="banner" style="border-color:rgba(61,220,151,.3);
+      background:rgba(61,220,151,.06);color:#a9f0cd">
+      <span>Removed "${esc(name)}" · moved to ${esc(r.backup)}</span></div>`);
+    await refresh();
+  } catch (e) {
+    banner(`<div class="banner"><span>Could not remove "${esc(name)}": ${esc(e)}</span></div>`);
+  }
+}
+
+// The tray's "Add account…" sends this event after raising the window.
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen('add-account', () => openAdd());
+}
+
+// Dialogs close on backdrop click and on any [data-close] button.
+document.querySelectorAll('dialog').forEach((d) => {
+  d.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-cancel-login]')) {
+      cancelLogin();
+      return;
+    }
+    if (ev.target === d || ev.target.closest('[data-close]')) {
+      if (d.id === 'loginDlg') { loginDlgClose(); return; }
+      d.close();
+    }
+  });
+});
 
 async function refresh() {
   try { await render(); } catch (e) { fatal(String(e)); }

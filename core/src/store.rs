@@ -95,6 +95,31 @@ pub fn inspect(p: &Paths) -> StoreReport {
     probe
 }
 
+/// Give a freshly created profile the shared store, so the new account's window
+/// shows the same chats as every other window.
+///
+/// Nothing is moved: a new profile has no data of its own, so there is nothing
+/// to preserve. Missing shared paths are skipped rather than created, which
+/// keeps this a no-op on a machine that has not been set up yet.
+pub fn link_profile(p: &Paths, name: &str) -> Result<()> {
+    let dir = p.profiles.join(name);
+    if !dir.is_dir() {
+        return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+    for item in SHARED {
+        let shared = p.base.join(item);
+        if !shared.exists() {
+            continue;
+        }
+        let target = dir.join(item);
+        if target.is_symlink() || target.exists() {
+            continue;
+        }
+        std::os::unix::fs::symlink(&shared, &target)?;
+    }
+    Ok(())
+}
+
 fn first(v: &[String]) -> String {
     v.first().cloned().unwrap_or_default()
 }

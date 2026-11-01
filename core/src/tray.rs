@@ -260,6 +260,18 @@ fn state_word(u: &Usage) -> &'static str {
 /// separate lines is what makes the list scannable — the old single line
 /// packed five values into one and was unreadable at menu width.
 pub fn menu_entries(usages: &[Usage], now: i64) -> Vec<MenuEntry> {
+    menu_entries_with(usages, now, &|_| true)
+}
+
+/// The same menu, told which accounts are signed in. A signed-out account is
+/// listed but cannot be opened usefully: opening it would show Codex's own
+/// sign-in screen under a name that reads as ready. `signed_in` is a predicate
+/// so the caller's account list stays the single source of truth.
+pub fn menu_entries_with(
+    usages: &[Usage],
+    now: i64,
+    signed_in: &dyn Fn(&str) -> bool,
+) -> Vec<MenuEntry> {
     let mut out = Vec::new();
     if usages.is_empty() {
         out.push(MenuEntry {
@@ -286,8 +298,11 @@ pub fn menu_entries(usages: &[Usage], now: i64) -> Vec<MenuEntry> {
 
     for (i, u) in usages.iter().enumerate() {
         let plan = u.plan.as_deref().unwrap_or("—");
+        let logged = signed_in(&u.account);
         let state = state_word(u);
-        let badge = if state == "live" {
+        let badge = if !logged {
+            "  (sign in)".to_string()
+        } else if state == "live" {
             String::new()
         } else {
             format!("  ({state})")
@@ -296,8 +311,12 @@ pub fn menu_entries(usages: &[Usage], now: i64) -> Vec<MenuEntry> {
             label: format!("{}. {}  ·  {plan}{badge}", i + 1, u.account),
             account: u.account.clone(),
             kind: RowKind::Account,
-            enabled: true,
+            enabled: logged,
         });
+        // The gauge and detail lines carry no account: only the name line opens
+        // a window. Assigning them one made the shell give every row the same
+        // `open:<account>` id, so clicking the numbers of a signed-out account
+        // opened the window the name line had just refused to open.
         out.push(MenuEntry {
             label: format!(
                 "   5h {} {}     week {} {}",
@@ -306,9 +325,9 @@ pub fn menu_entries(usages: &[Usage], now: i64) -> Vec<MenuEntry> {
                 text_bar(u.weekly_percent, 10),
                 pct(u.weekly_percent)
             ),
-            account: u.account.clone(),
-            kind: RowKind::Account,
-            enabled: true,
+            account: String::new(),
+            kind: RowKind::Header,
+            enabled: false,
         });
         let mut detail = Vec::new();
         if let Some(r) = reset_label(u.resets_at, now) {
@@ -325,9 +344,9 @@ pub fn menu_entries(usages: &[Usage], now: i64) -> Vec<MenuEntry> {
         if !detail.is_empty() {
             out.push(MenuEntry {
                 label: format!("   {}", detail.join(" · ")),
-                account: u.account.clone(),
-                kind: RowKind::Account,
-                enabled: true,
+                account: String::new(),
+                kind: RowKind::Header,
+                enabled: false,
             });
         }
         out.push(MenuEntry {

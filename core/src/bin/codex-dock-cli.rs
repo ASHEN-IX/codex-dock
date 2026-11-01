@@ -68,6 +68,92 @@ fn cmd_usage(p: &Paths, with_usage: bool) -> i32 {
     0
 }
 
+fn cmd_add(p: &Paths, name: &str, clone_from: Option<&str>) -> i32 {
+    let account = match accounts::create(p, name, clone_from) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("could not create '{name}': {e}");
+            return 1;
+        }
+    };
+    if let Err(e) = store::link_profile(p, name) {
+        eprintln!("created '{name}' but could not link the shared store: {e}");
+        return 1;
+    }
+    println!("created '{}' ({})", account.name, account.path.display());
+    println!("store:   linked to the shared database");
+    println!("sign in: codex-dock login {name}");
+    0
+}
+
+fn cmd_remove(p: &Paths, name: &str) -> i32 {
+    let bak = p.backup_dir(&stamp());
+    match accounts::remove(p, name, &bak) {
+        Ok(moved) => {
+            if let Err(e) = accounts::remove_user_data_dir(p, name, &bak) {
+                eprintln!("profile moved, but window data stayed behind: {e}");
+            }
+            println!("removed '{}' -> {}", name, moved.display());
+            println!("backup:  {}", bak.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("could not remove '{name}': {e}");
+            1
+        }
+    }
+}
+
+fn cmd_login(p: &Paths, name: &str) -> i32 {
+    let home = p.profiles.join(name);
+    if !home.is_dir() {
+        eprintln!("account '{name}' does not exist");
+        return 1;
+    }
+    // Same protection as the window: never let login write through a symlink
+    // into another account's credentials.
+    let bak = p.backup_dir(&stamp());
+    match accounts::materialise_auth(&home, &bak) {
+        Ok(true) => println!("kept a real auth.json (previous link in {})", bak.display()),
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("could not protect the existing credentials: {e}");
+            return 1;
+        }
+    }
+    // Inherit stdio: the device code and the waiting happen in the terminal.
+    let status = std::process::Command::new(codex_dock_core::tool::codex())
+        .args(["login", "--device-auth"])
+        .env("CODEX_HOME", &home)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_API_KEY")
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            let (_, ok) = accounts::auth_info(&home.join("auth.json"));
+            if ok {
+                println!("'{name}' signed in");
+                0
+            } else {
+                eprintln!("login exited cleanly but no credentials were written");
+                1
+            }
+        }
+        Ok(_) => {
+            match accounts::restore_auth(&home, &bak) {
+                Ok(true) => eprintln!("login did not complete; previous credentials restored"),
+                _ => eprintln!("login did not complete"),
+            }
+            1
+        }
+        Err(e) => {
+            let _ = accounts::restore_auth(&home, &bak);
+            eprintln!("could not run codex login: {e}");
+            1
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let p = Paths::real();
@@ -120,9 +206,33 @@ fn main() {
             }
             0
         }
+        Some("add") => match args.get(1) {
+            Some(name) => cmd_add(&p, name, args.get(2).map(|s| s.as_str())),
+            None => {
+                eprintln!("usage: codex-dock add <name> [clone-from]");
+                1
+            }
+        },
+        Some("remove") | Some("rm") => match args.get(1) {
+            Some(name) => cmd_remove(&p, name),
+            None => {
+                eprintln!("usage: codex-dock remove <name>");
+                1
+            }
+        },
+        Some("login") => match args.get(1) {
+            Some(name) => cmd_login(&p, name),
+            None => {
+                eprintln!("usage: codex-dock login <name>");
+                1
+            }
+        },
         Some(other) => {
             eprintln!("unknown command '{other}'");
-            eprintln!("commands: status | list | usage | repair | launch <name> | running");
+            eprintln!(
+                "commands: status | list | usage | add <name> [clone] | remove <name> | \
+                 login <name> | repair | launch <name> | running"
+            );
             1
         }
     };

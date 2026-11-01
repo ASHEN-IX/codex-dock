@@ -24,4 +24,10 @@ impl Paths {
     pub fn backup_dir(&self, stamp: &str) -> PathBuf {
         self.home().join(format!("codex-dock-backup-{stamp}"))
     }
+
+    /// Codex Desktop's per-window Electron profile. Each account gets its own
+    /// so two windows cannot share cookies or window state.
+    pub fn user_data_dir(&self, name: &str) -> PathBuf {
+        self.home().join(".config").join(format!("Codex-{name}"))
+    }
 }

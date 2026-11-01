@@ -164,24 +164,34 @@ fn menu_groups_each_account_over_several_lines() {
     w.resets_at = Some(1000 + 3600);
     let entries = tray::menu_entries(&[w], 1000);
 
-    let accounts: Vec<_> = entries
-        .iter()
-        .filter(|e| e.kind == tray::RowKind::Account)
-        .collect();
-    assert!(accounts.len() >= 2, "name and numbers get their own lines");
+    let labelled: Vec<_> = entries.iter().filter(|e| !e.label.trim().is_empty()).collect();
+    assert!(
+        labelled.len() >= 3,
+        "header, name and numbers each get their own line: {labelled:?}"
+    );
+    let lines: Vec<_> = entries.iter().filter(|e| e.kind == tray::RowKind::Account).collect();
+    assert_eq!(lines.len(), 1, "only the name line is an account action");
 
-    let name_line = &accounts[0].label;
+    let name_line = &lines[0].label;
     assert!(name_line.contains("work"), "got {name_line}");
     assert!(name_line.contains("plus"));
     assert!(!name_line.contains("55.0"), "numbers are not crammed into the name line");
 
-    let gauge_line = &accounts[1].label;
+    let gauge_line = entries
+        .iter()
+        .find(|e| e.label.contains("5h "))
+        .map(|e| e.label.clone())
+        .expect("a gauge line");
     assert!(gauge_line.contains("▓"), "has a text gauge: {gauge_line}");
     assert!(gauge_line.contains("55.0"));
     assert!(gauge_line.contains("58.0"));
 
-    // Every account row opens that account.
-    assert!(accounts.iter().all(|e| e.account == "work" && e.enabled));
+    // Exactly one row per account opens it; the numbers must not, or a
+    // signed-out account could be opened through its gauge line.
+    let openable: Vec<_> = entries.iter().filter(|e| e.kind == tray::RowKind::Account).collect();
+    assert_eq!(openable.len(), 1, "one clickable row per account");
+    assert_eq!(openable[0].account, "work");
+    assert!(openable[0].enabled);
 }
 
 #[test]
@@ -215,4 +225,27 @@ fn empty_account_list_says_so() {
     let entries = tray::menu_entries(&[], 1000);
     assert_eq!(entries.len(), 1);
     assert!(entries[0].label.to_lowercase().contains("no accounts"));
+}
+
+#[test]
+fn a_signed_out_account_is_listed_but_not_openable() {
+    let entries = tray::menu_entries_with(
+        &[u("fresh", None, None), u("work", Some(10.0), Some("plus"))],
+        1000,
+        &|name| name == "work",
+    );
+    let fresh = entries.iter().find(|e| e.account == "fresh").expect("listed");
+    assert!(!fresh.enabled, "opening it would only show Codex's sign-in screen");
+    assert!(fresh.label.contains("sign in"), "got {}", fresh.label);
+
+    let work = entries.iter().find(|e| e.account == "work").expect("listed");
+    assert!(work.enabled);
+    assert!(!work.label.contains("sign in"), "got {}", work.label);
+}
+
+#[test]
+fn a_signed_out_account_never_reads_as_zero_percent() {
+    let entries = tray::menu_entries_with(&[u("fresh", None, None)], 1000, &|_| false);
+    let text: String = entries.iter().map(|e| e.label.clone()).collect();
+    assert!(!text.contains("0%"), "got {text}");
 }
