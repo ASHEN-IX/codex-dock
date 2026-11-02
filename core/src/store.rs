@@ -117,7 +117,23 @@ pub fn link_profile(p: &Paths, name: &str) -> Result<()> {
         }
         std::os::unix::fs::symlink(&shared, &target)?;
     }
-    Ok(())
+    sync_projects(p, name)
+}
+
+/// Import sidebar metadata before an account window starts. Never call this
+/// against a running desktop window, which owns an in-memory copy of the file.
+pub fn sync_projects(p: &Paths, name: &str) -> Result<()> {
+    let profile = p.profiles.join(name);
+    if !profile.is_dir() {
+        return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    merge_global_state(
+        &p.base.join(".codex-global-state.json"),
+        &profile.join(".codex-global-state.json"),
+        &p.backup_dir(&format!("projects-{nonce}")).join(name),
+    )
 }
 
 fn first(v: &[String]) -> String {
@@ -243,7 +259,7 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
         // touching which account each window is signed in as.
         let base_state = p.base.join(".codex-global-state.json");
         let prof_state = dir.join(".codex-global-state.json");
-        if base_state.exists() && prof_state.exists() {
+        if base_state.exists() {
             merge_global_state(&base_state, &prof_state, &backup.join(name))?;
         }
 
@@ -287,35 +303,55 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
 /// The window's own `local-document-identity` is never touched: that is what
 /// keeps each window on its own account while showing the same projects.
 pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<()> {
-    if !base.exists() || !target.exists() {
+    if !base.exists() {
         return Ok(());
     }
     let src: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(base)?)
         .map_err(|e| Error::Msg(format!("bad base state json: {e}")))?;
-    let mut dst: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(target)?)
-        .map_err(|e| Error::Msg(format!("bad profile state json: {e}")))?;
+    let mut dst: serde_json::Value = if target.exists() {
+        serde_json::from_str(&std::fs::read_to_string(target)?)
+            .map_err(|e| Error::Msg(format!("bad profile state json: {e}")))?
+    } else {
+        serde_json::json!({})
+    };
+    if !src.is_object() || !dst.is_object() {
+        return Err(Error::Msg("desktop state must be a JSON object".into()));
+    }
 
-    std::fs::create_dir_all(backup)?;
-    std::fs::copy(target, backup.join("global-state.json"))?;
-
-    for key in ["local-projects", "app-server-projects-migration-by-host"] {
-        let (Some(src_map), Some(dst_map)) = (
-            src.get(key).and_then(|v| v.as_object()),
-            dst.get(key).and_then(|v| v.as_object()),
-        ) else {
+    // Migration flags and server project IDs belong to each profile. Copying
+    // those can mark a new account as migrated before it imports local projects.
+    for key in ["local-projects", "thread-project-assignments"] {
+        let Some(src_map) = src.get(key).and_then(|v| v.as_object()) else {
             continue;
         };
-        let mut merged = dst_map.clone();
+        if dst.get(key).is_some_and(|v| !v.is_object()) {
+            return Err(Error::Msg(format!("profile {key} must be an object")));
+        }
+        let mut merged = dst.get(key).and_then(|v| v.as_object()).cloned().unwrap_or_default();
         for (k, v) in src_map {
             merged.entry(k.clone()).or_insert_with(|| v.clone());
         }
         dst[key] = serde_json::Value::Object(merged);
     }
 
+    if let Some(order) = src.get("project-order").and_then(|v| v.as_array()) {
+        if dst.get("project-order").is_some_and(|v| !v.is_array()) {
+            return Err(Error::Msg("profile project-order must be an array".into()));
+        }
+        let mut merged = dst.get("project-order").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        for id in order {
+            if !merged.contains(id) { merged.push(id.clone()); }
+        }
+        dst["project-order"] = serde_json::Value::Array(merged);
+    }
+
     // Sidebar presentation only; never the identity block.
+    if dst.get("electron-persisted-atom-state").is_some_and(|v| !v.is_object()) {
+        return Err(Error::Msg("profile atom state must be an object".into()));
+    }
     if let (Some(s_atom), Some(d_atom)) = (
         src.get("electron-persisted-atom-state").and_then(|v| v.as_object()),
-        dst.get("electron-persisted-atom-state").and_then(|v| v.as_object()).cloned(),
+        Some(dst.get("electron-persisted-atom-state").and_then(|v| v.as_object()).cloned().unwrap_or_default()),
     ) {
         let mut atoms = d_atom;
         for k in ["flat-project-sidebar-preferences-v1", "new-task-project-by-computer"] {
@@ -328,6 +364,27 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
 
     let text = serde_json::to_string_pretty(&dst)
         .map_err(|e| Error::Msg(format!("could not serialise state: {e}")))?;
-    std::fs::write(target, text)?;
+    if target.exists() && std::fs::read_to_string(target)? == text {
+        return Ok(());
+    }
+    if target.exists() {
+        std::fs::create_dir_all(backup)?;
+        std::fs::copy(target, backup.join("global-state.json"))?;
+    }
+    // Write alongside the destination and rename, so readers never see partial JSON.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let temporary = target.with_file_name(format!(".codex-global-state-{}-{nonce}.tmp", std::process::id()));
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, target)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result?;
     Ok(())
 }

@@ -33,7 +33,7 @@ status: cli
 	@./target/debug/codex-dock-cli status
 
 release:
-	$(CARGO) tauri build --bundles deb
+	$(CARGO) tauri build --bundles appimage,deb,rpm
 
 # Downloadable binaries: end users do not need Git, Cargo, or the source tree.
 package-linux:

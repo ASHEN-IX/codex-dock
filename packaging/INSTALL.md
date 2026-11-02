@@ -2,25 +2,9 @@
 
 Codex Dock runs without its Git checkout. You still need Codex Desktop, the
 Codex CLI, SQLite, GTK3, WebKitGTK 4.1, and an AppIndicator runtime installed.
-The Linux bundle is built on the packager's system; use a compatible distribution
-and CPU architecture. It is not a universally compatible AppImage.
-
-## Arch Linux / Omarchy
-
-Install the downloaded `.pkg.tar.zst` file with:
-
-```sh
-sudo pacman -U ./codex-dock-0.1.0-1-x86_64.pkg.tar.zst
-```
-
-Pacman resolves dependencies from configured repositories. No Git or Rust is
-needed to install the binary package. The package owns only `/usr/bin` and
-`/usr/share` files; it has no install hooks or profile migration step.
-
-If an older copy exists in `~/.local/bin`, it can take precedence over `/usr/bin`.
-Keep using that copy until ready to switch; then quit Dock, move the two old
-executables and `~/.local/share/applications/codex-dock.desktop` to a backup,
-and launch `/usr/bin/codex-dock`. Account data stays in place.
+The raw Linux archive uses the packager's host ABI; choose a compatible
+distribution and CPU architecture. Use the CI-built formats below for broader
+distribution coverage. No source checkout is needed to run an installed app.
 
 ## User installation without root
 
@@ -41,6 +25,53 @@ Before updating, quit Dock through its tray menu. The installer saves existing
 executables under `<prefix>/share/codex-dock/previous-*`. To roll back, quit
 Dock and copy both saved executables back into `<prefix>/bin`.
 
+## AppImage, Debian and RPM packages
+
+The primary distribution path is the Linux CI workflow, which builds on Ubuntu
+22.04 for an older glibc baseline and also compiles/tests on Ubuntu 24.04.
+Download the workflow artifacts from the fork's **Actions → Linux packages** page,
+or use release assets once a publisher attaches them to a release.
+
+| Distribution family | Format | Install or launch |
+| --- | --- | --- |
+| Ubuntu, Debian, Mint, Pop!_OS | `.deb` | `sudo apt install ./codex-dock_*.deb` |
+| Fedora, RHEL derivatives | `.rpm` | `sudo dnf install ./codex-dock-*.rpm` |
+| openSUSE | `.rpm` | `sudo zypper install ./codex-dock-*.rpm` |
+| Other compatible Linux systems | `.AppImage` | `chmod +x ./Codex*.AppImage`, then run it |
+| Arch and derivatives | `.pkg.tar.zst` | See the optional Arch package below |
+
+The AppImage still depends on compatible host components such as glibc and
+may need FUSE. Extracting with `--appimage-extract` is an alternative when FUSE
+is unavailable. Formats and build jobs are not a guarantee that every distro,
+architecture, compositor or older release has been runtime tested. The current
+CI builds x86_64; ARM64 needs a separate native build and validation. Flatpak
+support is not implemented: it needs explicit access to host Codex executables
+and profile files, so a sandbox manifest cannot safely be guessed.
+
+Codex Desktop is discovered on PATH as `chatgpt`, `codex-desktop` or `ChatGPT`.
+For another installation location, set `CODEX_DESKTOP_BIN` to one executable
+path, for example `/home/you/Applications/Codex.AppImage`. It is not a shell
+command and does not accept embedded arguments. Ensure the variable reaches
+the GUI process as well as your shell. Codex Desktop and CLI must be installed
+separately on the host.
+
+## Arch Linux and derivatives (optional)
+
+Install the downloaded `.pkg.tar.zst` file with:
+
+```sh
+sudo pacman -U ./codex-dock-0.1.0-1-x86_64.pkg.tar.zst
+```
+
+Pacman resolves dependencies from configured repositories. No Git or Rust is
+needed to install the binary package. The package owns only `/usr/bin` and
+`/usr/share` files; it has no install hooks or profile migration step.
+
+If an older copy exists in `~/.local/bin`, it can take precedence over `/usr/bin`.
+Keep using that copy until ready to switch; then quit Dock, move the two old
+executables and `~/.local/share/applications/codex-dock.desktop` to a backup,
+and launch `/usr/bin/codex-dock`. Account data stays in place.
+
 ## Account and chat data
 
 Installing or updating either package does not create, repair, migrate, or remove
@@ -55,6 +86,7 @@ does not remove these directories. Store repair is a separate action inside Dock
 ## For contributors
 
 ```sh
+make release        # AppImage + Debian + RPM via the Tauri CLI
 make package-linux  # dist/*.tar.gz and SHA-256 checksum
 make package-arch   # also dist/*.pkg.tar.zst; requires makepkg
 ```

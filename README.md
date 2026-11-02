@@ -14,12 +14,13 @@ same threads appear in every window. Codex Dock manages that split for you.
 
 To install a prebuilt package without cloning this repository or installing Rust,
 see [binary package installation](packaging/INSTALL.md). Contributors can build
-a Linux archive with `make package-linux`, or an Arch/Omarchy package with
-`make package-arch`. These package targets do not change account or chat data.
+AppImage, Debian and RPM bundles with `make release`, a Linux archive with
+`make package-linux`, or an optional Arch package with `make package-arch`. These package targets do not change account or chat data.
 Prebuilt assets must be supplied by a release publisher; these commands alone
 do not publish them.
 
-Requires Rust, `sqlite3` on `PATH`, and `webkit2gtk-4.1` + `gtk3` for the shell.
+Building from source requires Rust, `sqlite3` on `PATH`, and WebKitGTK 4.1 +
+GTK3 development libraries. See the installation guide for distribution details.
 
 ```bash
 make setup     # installs the Tauri CLI (network, once)
@@ -35,7 +36,9 @@ make autostart   # start it docked when you log in (optional)
 make uninstall   # removes the binary, launcher, and autostart entry
 ```
 
-`make release` builds distributable bundles (`deb` + `AppImage`) instead.
+`make release` builds AppImage, Debian and RPM bundles. The Linux packages
+workflow builds on Ubuntu 22.04 and tests the core on Ubuntu 22.04 and 24.04.
+Artifacts need distribution-specific runtime validation before declaring support.
 
 ### Running as an installed app
 
@@ -83,6 +86,12 @@ data:
 These stay per profile, so each window keeps its own account:
 
 `auth.json`, `config.toml`, `.codex-global-state.json`
+
+New profiles import existing local projects and sidebar order automatically.
+Existing profiles import missing projects before their next fresh launch; close
+the account window first. Opening an already-running window only focuses it.
+An import backs up an existing state file before replacing it atomically, and
+does not copy another account's identity or migration flags.
 
 `.codex-global-state.json` is merged rather than shared: the project list is
 copied in with `setdefault` semantics while `local-document-identity` (which
