@@ -14,7 +14,7 @@ BIN     = codex-dock
 DESKTOP = $(PREFIX)/share/applications/codex-dock.desktop
 AUTOSTART = $(HOME)/.config/autostart/codex-dock.desktop
 
-.PHONY: test cli setup app status release install autostart uninstall clean
+.PHONY: test cli setup app status release package-linux package-arch install autostart uninstall clean
 
 test:
 	$(CARGO) test -p codex-dock-core
@@ -34,6 +34,14 @@ status: cli
 
 release:
 	$(CARGO) tauri build --bundles deb
+
+# Downloadable binaries: end users do not need Git, Cargo, or the source tree.
+package-linux:
+	$(CARGO) build --locked --release -p codex-dock -p codex-dock-core
+	sh packaging/package-linux.sh
+
+package-arch: package-linux
+	sh packaging/package-arch.sh
 
 # Installs the release binary under ~/.local, so no root is needed and the
 # launcher's Exec path stays valid.

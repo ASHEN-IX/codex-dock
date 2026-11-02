@@ -12,6 +12,13 @@ same threads appear in every window. Codex Dock manages that split for you.
 
 ## Install
 
+To install a prebuilt package without cloning this repository or installing Rust,
+see [binary package installation](packaging/INSTALL.md). Contributors can build
+a Linux archive with `make package-linux`, or an Arch/Omarchy package with
+`make package-arch`. These package targets do not change account or chat data.
+Prebuilt assets must be supplied by a release publisher; these commands alone
+do not publish them.
+
 Requires Rust, `sqlite3` on `PATH`, and `webkit2gtk-4.1` + `gtk3` for the shell.
 
 ```bash
