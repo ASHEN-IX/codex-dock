@@ -378,6 +378,31 @@ fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
 }
 
 #[tauri::command]
+async fn ping_account(account: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = Paths::real();
+        let cache = app.state::<UsageCache>();
+        if !accounts::list(&p).map_err(|e| e.to_string())?
+            .iter().any(|a| a.name == account && a.logged_in && a.account_id.is_some()) {
+            return Err("Ping requires a signed-in ChatGPT account, not an API-key profile.".to_string());
+        }
+        let before = cache.0.get_or_read(&p, &account, now);
+        // An active window needs no extra request. Never manufacture a new reset time.
+        if !before.stale && before.error.is_none() && before.resets_at.is_some_and(|t| t > now()) {
+            return Ok(serde_json::json!({"sent": false, "usage": usage_json(&before, now())}));
+        }
+        if !before.stale && before.error.is_none() && before.five_hour_percent.is_none() {
+            return Err("The server does not report a five-hour window for this account. No ping sent.".into());
+        }
+        let result = codex_dock_core::ping::send(&p, &account);
+        cache.0.forget(&account);
+        let after = cache.0.get_or_read(&p, &account, now);
+        result.map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({"sent": true, "usage": usage_json(&after, now())}))
+    }).await.map_err(|e| format!("Ping worker failed: {e}"))?
+}
+
+#[tauri::command]
 fn open_window(account: String) -> Result<u32, String> {
     let p = Paths::real();
     // Opening a signed-out profile only shows Codex's own sign-in screen under a
@@ -589,6 +614,7 @@ fn main() {
             delete_account,
             store_status,
             usage_all,
+            ping_account,
             open_window,
             repair_store
         ])

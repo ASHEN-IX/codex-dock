@@ -342,6 +342,7 @@ function colorOf(pct) {
   return pct >= 85 ? 'red' : pct >= 60 ? 'amber' : 'green';
 }
 
+const pendingPings = new Set();
 async function render() {
   if (!invoke) {
     fatal('window.__TAURI__ is undefined — the page is running without the Tauri bridge.');
@@ -412,7 +413,8 @@ async function render() {
       <div class="actions">
         ${needsLogin ? `<button data-login="${esc(a.name)}" class="primary">Sign in</button>` : ''}
         ${a.loggedIn && !needsLogin ? `<button data-account="${esc(a.name)}">Open</button>` : ''}
-        <button class="mini" data-delete="${esc(a.name)}" title="Remove account">Remove</button>
+        ${a.loggedIn && !needsLogin && a.accountId ? `<button data-ping="${esc(a.name)}" ${pendingPings.has(a.name) ? 'disabled' : ''} title="Send one small message, then refresh usage. Uses allowance; an active window stays unchanged.">${pendingPings.has(a.name) ? 'Pinging…' : 'Ping'}</button>` : ''}
+        <button class="mini" data-delete="${esc(a.name)}" ${pendingPings.has(a.name) ? 'disabled' : ''} title="Remove account">Remove</button>
       </div>
       <div class="bars">
         ${bar('5-hour', u.fiveHour)}
@@ -436,8 +438,33 @@ async function render() {
     b.addEventListener('click', () => beginLogin(b.dataset.login));
   });
 
+  $('accounts').querySelectorAll('button[data-ping]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const account = b.dataset.ping;
+      if (pendingPings.has(account)) return;
+      pendingPings.add(account);
+      b.disabled = true;
+      b.textContent = 'Pinging…';
+      b.closest('.acct').querySelector('button[data-delete]').disabled = true;
+      let message;
+      try {
+        const result = await invoke('ping_account', { account });
+        const u = result.usage;
+        const reset = !u.stale && !u.error && u.resetsAt * 1000 > Date.now()
+          ? `Resets at ${new Date(u.resetsAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}.`
+          : 'The server has not confirmed a reset time yet. Refresh usage shortly.';
+        message = `${account}: ${result.sent ? 'Ping sent.' : 'A window is already active; no message sent.'} ${reset}`;
+      } catch (e) { message = `${account}: ${String(e)}`; }
+      finally { pendingPings.delete(account); }
+      await refresh();
+      banner(`<div class="banner"><span>${esc(message)}</span></div>`);
+    });
+  });
+
   $('accounts').querySelectorAll('button[data-delete]').forEach((b) => {
-    b.addEventListener('click', () => removeAccount(b.dataset.delete));
+    b.addEventListener('click', () => {
+      if (!pendingPings.has(b.dataset.delete)) removeAccount(b.dataset.delete);
+    });
   });
 }
 

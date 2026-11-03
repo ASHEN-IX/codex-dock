@@ -42,6 +42,19 @@ Artifacts need distribution-specific runtime validation before declaring support
 
 ### Running as an installed app
 
+- **Ping** sends one minimal message for a signed-in account to open an idle
+  usage window, then refreshes the server's usage and reset time. It uses
+  allowance. API-key profiles are excluded. If the server already reports an
+  active window or no five-hour window at all, no message is sent.
+  It never resets an active limit or invents a five-hour countdown. Missing or
+  delayed reset times remain unconfirmed until a fresh server reading arrives.
+  Requires Codex CLI 0.166 or later with `exec --ignore-user-config` support.
+  Pings run in a temporary directory, with ephemeral history, read-only sandbox,
+  ignored user config/rules and disabled shell, hooks, plugins and delegation.
+  There is a one-minute cooldown per account, a 90-second timeout, and no
+  schedules or automatic retries. A failed/timed-out request may still use
+  allowance. Existing projects, config and saved chats are not used as context.
+
 - **Closing the window docks it.** The tray keeps ticking and keeps the usage
   numbers live; the process keeps running. Quit from the tray menu.
 - **One instance.** Launching the app again (the shortcut, the launcher, the
