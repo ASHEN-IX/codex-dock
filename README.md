@@ -63,13 +63,18 @@ make cli
 | Command | What it does |
 |---|---|
 | `status` | Store health, thread/project counts, accounts and login state |
-| `list` | One line per account: name and account id |
+| `list` | Local profile names; provider account IDs are omitted |
 | `usage` | Per-account plan, 5-hour %, weekly %, credits |
 | `launch <name>` | Open Codex Desktop for one account |
-| `running` | Windows currently open, mapped back to accounts |
+| `running [name]` | PIDs of open windows, optionally filtered by a local profile name |
 | `repair` | Verify and repair the shared store, writing a backup |
 
 `status` against a healthy store writes nothing.
+
+Routine CLI output omits provider account IDs and per-window data paths so they
+do not end up in captured terminal logs. `running` prints process IDs; use
+`codex-dock-cli running work` to select one local profile without printing its
+process-derived account metadata. `launch` reports the opened window's PID.
 
 ## How the shared store works
 

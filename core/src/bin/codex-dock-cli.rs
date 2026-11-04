@@ -36,23 +36,51 @@ fn cmd_status(p: &Paths) -> i32 {
     let accts = accounts::list(p).unwrap_or_default();
     println!("\naccounts:");
     for a in &accts {
-        let id = a.account_id.as_deref().unwrap_or("—");
-        println!(
-            "  {:<12} {} ({})",
-            a.name,
-            if a.logged_in {
-                "logged in"
-            } else {
-                "signed out"
-            },
-            id
-        );
+        println!("{}", account_status_line(a));
     }
     if matches!(r.state, StoreState::Shared) {
         0
     } else {
         1
     }
+}
+
+/// Routine status displays local labels and login state, never provider IDs.
+fn account_status_line(account: &accounts::Account) -> String {
+    format!(
+        "  {:<12} {}",
+        account.name,
+        if account.logged_in {
+            "logged in"
+        } else {
+            "signed out"
+        }
+    )
+}
+
+/// Process IDs are enough to identify windows without exporting account
+/// metadata or per-window paths into captured terminal logs.
+fn running_line(window: &windows::WindowProc) -> String {
+    format!("pid {}", window.pid)
+}
+
+fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
+    let filter = match account
+        .map(|name| accounts::canonical_name(p, name))
+        .transpose()
+    {
+        Ok(name) => name,
+        Err(e) => {
+            eprintln!("could not select profile: {e}");
+            return 1;
+        }
+    };
+    for window in windows::running_for(p, std::path::Path::new("/proc")) {
+        if filter.as_ref().is_none_or(|name| *name == window.account) {
+            println!("{}", running_line(&window));
+        }
+    }
+    0
 }
 
 fn cmd_usage(p: &Paths, with_usage: bool) -> i32 {
@@ -184,7 +212,7 @@ fn main() {
         Some("status") | None => cmd_status(&p),
         Some("list") => {
             for a in accounts::list(&p).unwrap_or_default() {
-                println!("{}\t{}", a.name, a.account_id.unwrap_or_default());
+                println!("{}", a.name);
             }
             0
         }
@@ -210,7 +238,7 @@ fn main() {
         Some("launch") => match args.get(1) {
             Some(name) => match windows::launch(&p, name) {
                 Ok(w) => {
-                    println!("opened {} (pid {})", w.account, w.pid);
+                    println!("opened window (pid {})", w.pid);
                     0
                 }
                 Err(e) => {
@@ -223,17 +251,7 @@ fn main() {
                 1
             }
         },
-        Some("running") => {
-            for w in windows::running_for(&p, std::path::Path::new("/proc")) {
-                println!(
-                    "{}\t{}\tpid {}",
-                    w.account,
-                    w.user_data_dir.display(),
-                    w.pid
-                );
-            }
-            0
-        }
+        Some("running") => cmd_running(&p, args.get(1).map(String::as_str)),
         Some("add") => match args.get(1) {
             Some(name) => cmd_add(&p, name, args.get(2).map(|s| s.as_str())),
             None => {
@@ -259,10 +277,45 @@ fn main() {
             eprintln!("unknown command '{other}'");
             eprintln!(
                 "commands: status | list | usage | add <name> [clone] | remove <name> | \
-                 login <name> | repair | launch <name> | running"
+                 login <name> | repair | launch <name> | running [name]"
             );
             1
         }
     };
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn routine_status_does_not_disclose_provider_identity_or_profile_paths() {
+        let account = accounts::Account {
+            name: "work".into(),
+            path: PathBuf::from("/home/private-user/.codex-profiles/work"),
+            account_id: Some("sensitive-provider-identifier".into()),
+            logged_in: true,
+        };
+        let line = account_status_line(&account);
+        assert!(line.contains("work"));
+        assert!(line.contains("logged in"));
+        assert!(!line.contains("sensitive-provider-identifier"));
+        assert!(!line.contains("private-user"));
+    }
+
+    #[test]
+    fn running_output_does_not_disclose_process_account_metadata() {
+        let window = windows::WindowProc {
+            pid: 42,
+            account: "private-account-label".into(),
+            user_data_dir: PathBuf::from("/home/private-user/.config/Codex-private-account-label"),
+        };
+        let line = running_line(&window);
+        assert!(line.contains("42"));
+        assert!(!line.contains("private-account-label"));
+        assert!(!line.contains("private-user"));
+        assert!(!line.contains("Codex-"));
+    }
 }
