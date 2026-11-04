@@ -19,7 +19,7 @@ AUTOSTART = $(HOME)/.config/autostart/codex-dock.desktop
 check-core:
 	$(CARGO) fmt --all -- --check
 	$(CARGO) test --locked -p codex-dock-core
-	node scripts/check-ui.mjs
+	python3 scripts/check-ui.py
 
 check: check-core
 	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings

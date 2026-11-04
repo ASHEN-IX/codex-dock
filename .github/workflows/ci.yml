@@ -25,7 +25,7 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup default stable
       - run: cargo fmt --all -- --check
-      - run: node scripts/check-ui.mjs
+      - run: python3 scripts/check-ui.py
       - name: Validate workflow syntax and expressions
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
       - name: Check release helper syntax

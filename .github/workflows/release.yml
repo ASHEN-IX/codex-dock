@@ -36,7 +36,7 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - run: cargo test --locked -p codex-dock-core
-      - run: node scripts/check-ui.mjs
+      - run: python3 scripts/check-ui.py
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version '^2' --locked
       - name: Build portable Linux and Debian packages

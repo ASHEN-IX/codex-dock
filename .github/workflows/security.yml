@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [rust, javascript-typescript, actions]
+        language: [rust, javascript-typescript, python, actions]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

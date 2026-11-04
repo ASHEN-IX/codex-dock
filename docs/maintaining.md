@@ -42,7 +42,7 @@ workflows on a feature branch alone do not activate default-branch maintenance.
   and complete release builds on Ubuntu 22.04 and 24.04. Compiled binaries are
   short-lived review artifacts, not installer packages.
 - **Security:** pinned cargo-audit with a verified download checksum, plus CodeQL
-  for Rust, JavaScript and Actions. Scheduled scans catch new advisories without
+  for Rust, JavaScript, Python helpers and Actions. Scheduled scans catch new advisories without
   a source change. Audit reports are retained briefly. Unmaintained dependency
   warnings still require review even when no known vulnerability fails the job.
   The initial findings are recorded in [dependency-review.md](dependency-review.md).

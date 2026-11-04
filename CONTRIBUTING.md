@@ -53,7 +53,7 @@ for sensitive reports and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for conduct.
 
 CI checks formatting, frontend syntax, workflow expressions, core tests, Clippy,
 and desktop/CLI builds on Ubuntu 22.04 and 24.04. Security checks audit locked
-dependencies and scan Rust, frontend code, and GitHub Actions with CodeQL.
+dependencies and scan Rust, frontend code, Python helpers, and GitHub Actions with CodeQL.
 Frontend syntax checking is not an end-to-end UI test; builds do not verify
 window focusing, login, tray integration, or data migration on every desktop.
 
