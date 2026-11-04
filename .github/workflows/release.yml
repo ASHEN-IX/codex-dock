@@ -1,0 +1,72 @@
+name: Draft release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag matching Cargo.toml and tauri.conf.json (for example v0.1.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - name: Validate the tag before checkout
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-linux
+      - name: Check version metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 scripts/check-release.py "$RELEASE_TAG"
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo test --locked -p codex-dock-core
+      - run: python3 scripts/check-ui.py
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build portable Linux and Debian packages
+        run: cargo tauri build --bundles appimage,deb -- --locked
+      - name: Collect only release packages and checksums
+        run: |
+          mkdir release-artifacts
+          cp target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb release-artifacts/
+          cd release-artifacts
+          sha256sum -- *.AppImage *.deb > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-packages
+          path: release-artifacts/
+          retention-days: 14
+          if-no-files-found: error
+  draft:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-packages
+          path: release-artifacts
+      - name: Create an unpublished release for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Codex Dock $RELEASE_TAG" release-artifacts/*

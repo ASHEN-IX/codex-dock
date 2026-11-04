@@ -23,7 +23,11 @@ fn create_clones_config_from_source() {
     let t = tmp("clone");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     accounts::create(&p, "base", None).unwrap();
-    std::fs::write(t.join(".codex-profiles/base/config.toml"), "model = \"x\"\n").unwrap();
+    std::fs::write(
+        t.join(".codex-profiles/base/config.toml"),
+        "model = \"x\"\n",
+    )
+    .unwrap();
     accounts::create(&p, "copy", Some("base")).unwrap();
     let got = std::fs::read_to_string(t.join(".codex-profiles/copy/config.toml")).unwrap();
     assert!(got.contains("model"));

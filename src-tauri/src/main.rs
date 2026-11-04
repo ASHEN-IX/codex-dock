@@ -18,14 +18,20 @@ struct AutoPingState {
 #[tauri::command]
 fn auto_ping_settings(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<AutoPingState>();
-    let settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|_| "Auto-ping settings unavailable")?;
     serde_json::to_value(&*settings).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn set_auto_ping(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AutoPingState>();
-    let mut settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
+    let mut settings = state
+        .settings
+        .lock()
+        .map_err(|_| "Auto-ping settings unavailable")?;
     let mut updated = settings.clone();
     updated.set_enabled(enabled);
     updated.save(&state.path).map_err(|e| e.to_string())?;
@@ -41,20 +47,45 @@ fn set_auto_ping(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
 fn auto_ping_tick(app: &tauri::AppHandle) {
     let p = Paths::real();
     for account in accounts::list(&p).unwrap_or_default() {
-        let Some(id) = account.account_id.as_ref().filter(|_| account.logged_in) else { continue };
+        let Some(id) = account.account_id.as_ref().filter(|_| account.logged_in) else {
+            continue;
+        };
         let state = app.state::<AutoPingState>();
-        if !state.settings.lock().unwrap_or_else(|e| e.into_inner()).enabled { return; }
-        let usage = app.state::<UsageCache>().0.get_or_read(&p, &account.name, now);
-        if usage.stale || usage.error.is_some() || usage.five_hour_percent.is_none()
+        if !state
+            .settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enabled
+        {
+            return;
+        }
+        let usage = app
+            .state::<UsageCache>()
+            .0
+            .get_or_read(&p, &account.name, now);
+        if usage.stale
+            || usage.error.is_some()
+            || usage.five_hour_percent.is_none()
             || usage.five_hour_percent.is_some_and(|n| n >= 100.0)
-            || usage.weekly_percent.is_some_and(|n| n >= 100.0) { continue; }
+            || usage.weekly_percent.is_some_and(|n| n >= 100.0)
+        {
+            continue;
+        }
         {
             let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-            if !settings.enabled { return; }
-            if !settings.due(id, now()) { continue; }
-            settings.records.insert(id.clone(), codex_dock_core::automation::Record {
-                attempted_at: now(), ..Default::default()
-            });
+            if !settings.enabled {
+                return;
+            }
+            if !settings.due(id, now()) {
+                continue;
+            }
+            settings.records.insert(
+                id.clone(),
+                codex_dock_core::automation::Record {
+                    attempted_at: now(),
+                    ..Default::default()
+                },
+            );
             // Reserve durably before sending: interrupted requests never loop.
             if let Err(e) = settings.save(&state.path) {
                 settings.enabled = false;
@@ -99,7 +130,13 @@ struct Login {
 
 impl Login {
     fn starting() -> Login {
-        Login { code: None, url: None, done: false, error: None, pid: None }
+        Login {
+            code: None,
+            url: None,
+            done: false,
+            error: None,
+            pid: None,
+        }
     }
 }
 
@@ -137,7 +174,10 @@ fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     }
     {
         let state = app.state::<LoginState>();
-        let mut map = state.0.lock().map_err(|_| "login state poisoned".to_string())?;
+        let mut map = state
+            .0
+            .lock()
+            .map_err(|_| "login state poisoned".to_string())?;
         // Adopt the in-flight sign-in instead of starting a second one: the
         // dialog can be reopened, and two `codex login` children would race for
         // the same auth.json.
@@ -160,7 +200,11 @@ fn run_login(app: tauri::AppHandle, name: String, home: std::path::PathBuf) {
     // account's credentials.
     let backup = Paths::real().backup_dir(&now().to_string());
     if let Err(e) = accounts::materialise_auth(&home, &backup) {
-        set_login_error(&app, &name, format!("could not protect the existing credentials: {e}"));
+        set_login_error(
+            &app,
+            &name,
+            format!("could not protect the existing credentials: {e}"),
+        );
         return;
     }
 
@@ -325,8 +369,7 @@ fn last_meaningful_line(s: &str) -> String {
     strip_ansi(s)
         .lines()
         .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty() && !l.starts_with('─'))
-        .last()
+        .rfind(|l| !l.is_empty() && !l.starts_with('─'))
         .unwrap_or_else(|| "sign-in did not complete".to_string())
 }
 
@@ -413,7 +456,9 @@ async fn usage_all(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
             rows.push(usage_json(&u, now()));
         }
         serde_json::json!(rows)
-    }).await.map_err(|e| format!("Usage refresh failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Usage refresh failed: {e}"))
 }
 
 fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
@@ -437,34 +482,57 @@ fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
 #[tauri::command]
 async fn ping_account(account: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || perform_ping(&app, &account))
-        .await.map_err(|e| format!("Ping worker failed: {e}"))?
+        .await
+        .map_err(|e| format!("Ping worker failed: {e}"))?
 }
 
 fn perform_ping(app: &tauri::AppHandle, account: &str) -> Result<serde_json::Value, String> {
-        let p = Paths::real();
-        let cache = app.state::<UsageCache>();
-        let identity = accounts::list(&p).map_err(|e| e.to_string())?
-            .into_iter().find(|a| a.name == account && a.logged_in)
-            .and_then(|a| a.account_id)
-            .ok_or("Ping requires a signed-in ChatGPT account, not an API-key profile.")?;
-        let started = now();
-        // A future reset time is quota metadata, not evidence of a running
-        // desktop window or a previously delivered ping. An explicit click sends.
-        let result = codex_dock_core::ping::send(&p, account);
-        cache.0.forget(account);
-        let after = cache.0.get_or_read(&p, account, now);
-        let state = app.state::<AutoPingState>();
-        let mut settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
-        let mut warning = None;
-        let newer_success = result.is_err() && settings.records.get(&identity)
+    let p = Paths::real();
+    let cache = app.state::<UsageCache>();
+    let identity = accounts::list(&p)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|a| a.name == account && a.logged_in)
+        .and_then(|a| a.account_id)
+        .ok_or("Ping requires a signed-in ChatGPT account, not an API-key profile.")?;
+    let started = now();
+    // A future reset time is quota metadata, not evidence of a running
+    // desktop window or a previously delivered ping. An explicit click sends.
+    let result = codex_dock_core::ping::send(&p, account);
+    cache.0.forget(account);
+    let after = cache.0.get_or_read(&p, account, now);
+    let state = app.state::<AutoPingState>();
+    let mut settings = state
+        .settings
+        .lock()
+        .map_err(|_| "Auto-ping settings unavailable")?;
+    let mut warning = None;
+    let newer_success = result.is_err()
+        && settings
+            .records
+            .get(&identity)
             .is_some_and(|r| r.reply.is_some() && r.attempted_at >= started);
-        if !newer_success {
-            let reset = if after.error.is_none() && !after.stale { after.resets_at } else { None };
-            settings.complete(&identity, now(), result.as_ref().ok().cloned(), result.as_ref().err().map(|e| e.to_string()), reset);
-            if let Err(e) = settings.save(&state.path) { warning = Some(format!("Could not save ping status: {e}")); }
+    if !newer_success {
+        let reset = if after.error.is_none() && !after.stale {
+            after.resets_at
+        } else {
+            None
+        };
+        settings.complete(
+            &identity,
+            now(),
+            result.as_ref().ok().cloned(),
+            result.as_ref().err().map(|e| e.to_string()),
+            reset,
+        );
+        if let Err(e) = settings.save(&state.path) {
+            warning = Some(format!("Could not save ping status: {e}"));
         }
-        let reply = result.map_err(|e| e.to_string())?;
-        Ok(serde_json::json!({"sent": true, "reply": reply, "usage": usage_json(&after, now()), "warning": warning}))
+    }
+    let reply = result.map_err(|e| e.to_string())?;
+    Ok(
+        serde_json::json!({"sent": true, "reply": reply, "usage": usage_json(&after, now()), "warning": warning}),
+    )
 }
 
 #[tauri::command]
@@ -477,9 +545,13 @@ fn open_window(account: String) -> Result<u32, String> {
         .into_iter()
         .any(|a| a.name == account && a.logged_in);
     if !logged_in {
-        return Err(format!("'{account}' is not signed in yet — sign in from Codex Dock first"));
+        return Err(format!(
+            "'{account}' is not signed in yet — sign in from Codex Dock first"
+        ));
     }
-    windows::launch(&p, &account).map(|w| w.pid).map_err(|e| e.to_string())
+    windows::launch(&p, &account)
+        .map(|w| w.pid)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -542,7 +614,10 @@ fn main() {
                 eprintln!("Auto-ping disabled: {e}");
                 Default::default()
             });
-            app.manage(AutoPingState { settings: Mutex::new(settings), path });
+            app.manage(AutoPingState {
+                settings: Mutex::new(settings),
+                path,
+            });
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 auto_ping_tick(&handle);
@@ -555,13 +630,23 @@ fn main() {
                 let p = Paths::real();
                 let accounts = accounts::list(&p).unwrap_or_default();
                 let cache = &app_for_menu.state::<UsageCache>().0;
-                let usages: Vec<_> =
-                    accounts.iter().map(|a| cache.last(&a.name).unwrap_or_else(|| usage::Usage::empty(&a.name, 0))).collect();
-                let signed_in: Vec<String> =
-                    accounts.iter().filter(|a| a.logged_in).map(|a| a.name.clone()).collect();
+                let usages: Vec<_> = accounts
+                    .iter()
+                    .map(|a| {
+                        cache
+                            .last(&a.name)
+                            .unwrap_or_else(|| usage::Usage::empty(&a.name, 0))
+                    })
+                    .collect();
+                let signed_in: Vec<String> = accounts
+                    .iter()
+                    .filter(|a| a.logged_in)
+                    .map(|a| a.name.clone())
+                    .collect();
                 let is_in = |name: &str| signed_in.iter().any(|n| n == name);
-                for (i, entry) in
-                    tray::menu_entries_with(&usages, now(), &is_in).into_iter().enumerate()
+                for (i, entry) in tray::menu_entries_with(&usages, now(), &is_in)
+                    .into_iter()
+                    .enumerate()
                 {
                     match entry.kind {
                         tray::RowKind::Separator => {

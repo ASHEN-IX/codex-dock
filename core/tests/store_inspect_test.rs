@@ -15,7 +15,11 @@ fn detects_shared_store_by_inode() {
     std::fs::create_dir_all(&p.base).unwrap();
     db::create_empty(&p.base.join("state_5.sqlite")).unwrap();
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
-    std::os::unix::fs::symlink(&p.base.join("state_5.sqlite"), p.profiles.join("work/state_5.sqlite")).unwrap();
+    std::os::unix::fs::symlink(
+        p.base.join("state_5.sqlite"),
+        p.profiles.join("work/state_5.sqlite"),
+    )
+    .unwrap();
     let r = store::inspect(&p);
     assert!(matches!(r.state, StoreState::Shared), "got {:?}", r.state);
     std::fs::remove_dir_all(&t).ok();
@@ -31,9 +35,14 @@ fn detects_auth_cycle() {
     // directory itself resolves back into the base, so following auth.json loops.
     std::fs::remove_dir_all(p.profiles.join("work")).unwrap();
     std::os::unix::fs::symlink(&p.base, p.profiles.join("work")).unwrap();
-    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
     let r = store::inspect(&p);
-    assert!(matches!(r.state, StoreState::AuthCycle), "got {:?}", r.state);
+    assert!(
+        matches!(r.state, StoreState::AuthCycle),
+        "got {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -43,7 +52,11 @@ fn detects_nested_profile_dir() {
     let p = Paths::new(t.join(".codex"), t.join(".codex"));
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
     let r = store::inspect(&p);
-    assert!(matches!(r.state, StoreState::Nested { .. }), "got {:?}", r.state);
+    assert!(
+        matches!(r.state, StoreState::Nested { .. }),
+        "got {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -57,7 +70,16 @@ fn detects_split_store_with_threads() {
     db::create_empty(&p.profiles.join("work/state_5.sqlite")).unwrap();
     db::insert_thread(&p.profiles.join("work/state_5.sqlite"), "t1", "/x/y.jsonl").unwrap();
     let r = store::inspect(&p);
-    assert!(matches!(r.state, StoreState::Split { threads_in_profile: 1 }), "got {:?}", r.state);
+    assert!(
+        matches!(
+            r.state,
+            StoreState::Split {
+                threads_in_profile: 1
+            }
+        ),
+        "got {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -68,7 +90,11 @@ fn not_configured_when_base_db_missing() {
     std::fs::create_dir_all(&p.base).unwrap();
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
     let r = store::inspect(&p);
-    assert!(matches!(r.state, StoreState::NotConfigured), "got {:?}", r.state);
+    assert!(
+        matches!(r.state, StoreState::NotConfigured),
+        "got {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -80,10 +106,19 @@ fn symlinked_auth_into_a_real_profile_is_not_a_cycle() {
     std::fs::create_dir_all(&p.base).unwrap();
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
     db::create_empty(&p.base.join("state_5.sqlite")).unwrap();
-    std::fs::write(p.profiles.join("work/auth.json"), r#"{"tokens":{"account_id":"w"}}"#).unwrap();
-    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
+    std::fs::write(
+        p.profiles.join("work/auth.json"),
+        r#"{"tokens":{"account_id":"w"}}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
     let r = store::inspect(&p);
-    assert!(!matches!(r.state, StoreState::AuthCycle), "false positive: {:?}", r.state);
+    assert!(
+        !matches!(r.state, StoreState::AuthCycle),
+        "false positive: {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -101,9 +136,14 @@ fn profile_symlinked_to_base_is_a_real_cycle() {
     std::fs::write(p.base.join("auth.json.tmp"), "{}").unwrap();
     std::fs::remove_file(p.base.join("auth.json.tmp")).unwrap();
     std::os::unix::fs::symlink(&p.base, p.profiles.join("work")).unwrap();
-    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
     let r = store::inspect(&p);
-    assert!(matches!(r.state, StoreState::AuthCycle), "expected cycle, got {:?}", r.state);
+    assert!(
+        matches!(r.state, StoreState::AuthCycle),
+        "expected cycle, got {:?}",
+        r.state
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -119,7 +159,11 @@ fn a_profile_symlinked_to_base_is_shared_not_split() {
     db::insert_thread(&p.base.join("state_5.sqlite"), "t1", "/x.jsonl").unwrap();
     std::os::unix::fs::symlink(&p.base, p.profiles.join("default")).unwrap();
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
-    std::os::unix::fs::symlink(&p.base.join("state_5.sqlite"), p.profiles.join("work/state_5.sqlite")).unwrap();
+    std::os::unix::fs::symlink(
+        p.base.join("state_5.sqlite"),
+        p.profiles.join("work/state_5.sqlite"),
+    )
+    .unwrap();
     let r = store::inspect(&p);
     assert!(matches!(r.state, StoreState::Shared), "got {:?}", r.state);
     std::fs::remove_dir_all(&t).ok();

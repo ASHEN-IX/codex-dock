@@ -14,7 +14,16 @@ BIN     = codex-dock
 DESKTOP = $(PREFIX)/share/applications/codex-dock.desktop
 AUTOSTART = $(HOME)/.config/autostart/codex-dock.desktop
 
-.PHONY: test cli setup app status release package-linux package-arch install autostart uninstall clean
+.PHONY: test cli setup app status release package-linux package-arch install autostart uninstall clean check-core check
+
+check-core:
+	$(CARGO) fmt --all -- --check
+	$(CARGO) test --locked -p codex-dock-core
+	python3 scripts/check-ui.py
+
+check: check-core
+	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
+	$(CARGO) build --locked --workspace
 
 test:
 	$(CARGO) test -p codex-dock-core

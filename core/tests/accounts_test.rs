@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 fn fixture(root: &Path, name: &str, auth: Option<&str>) -> PathBuf {
     let d = root.join(".codex-profiles").join(name);
     std::fs::create_dir_all(&d).unwrap();
-    if let Some(a) = auth { std::fs::write(d.join("auth.json"), a).unwrap(); }
+    if let Some(a) = auth {
+        std::fs::write(d.join("auth.json"), a).unwrap();
+    }
     d
 }
 
@@ -54,8 +56,19 @@ fn default_alias_is_one_account_and_named_profile_wins() {
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     fixture(&t, "default", Some(r#"{"tokens":{"account_id":"same"}}"#));
     fixture(&t, "work", Some(r#"{"tokens":{"account_id":"same"}}"#));
-    fixture(&t, "secondary", Some(r#"{"tokens":{"account_id":"other"}}"#));
-    assert_eq!(accounts::list(&p).unwrap().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["secondary", "work"]);
+    fixture(
+        &t,
+        "secondary",
+        Some(r#"{"tokens":{"account_id":"other"}}"#),
+    );
+    assert_eq!(
+        accounts::list(&p)
+            .unwrap()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["secondary", "work"]
+    );
     assert_eq!(accounts::canonical_name(&p, "default").unwrap(), "work");
     assert_eq!(accounts::profiles(&p).unwrap().len(), 3);
     std::fs::remove_dir_all(t).unwrap();
@@ -65,7 +78,8 @@ fn default_alias_is_one_account_and_named_profile_wins() {
 fn separate_signed_out_profiles_are_not_collapsed() {
     let t = tmp("signed-out");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
-    fixture(&t, "first", None); fixture(&t, "second", None);
+    fixture(&t, "first", None);
+    fixture(&t, "second", None);
     assert_eq!(accounts::list(&p).unwrap().len(), 2);
     std::fs::remove_dir_all(t).unwrap();
 }

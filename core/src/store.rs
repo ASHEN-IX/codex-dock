@@ -53,9 +53,17 @@ pub fn inspect(p: &Paths) -> StoreReport {
     }
 
     // Nested: the profiles dir lives inside (or is) the base store.
-    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(&p.profiles), std::fs::canonicalize(&p.base)) {
+    if let (Ok(a), Ok(b)) = (
+        std::fs::canonicalize(&p.profiles),
+        std::fs::canonicalize(&p.base),
+    ) {
         if a.starts_with(&b) {
-            return report(StoreState::Nested { profile: first(&accounts) }, &base_db);
+            return report(
+                StoreState::Nested {
+                    profile: first(&accounts),
+                },
+                &base_db,
+            );
         }
     }
 
@@ -82,7 +90,12 @@ pub fn inspect(p: &Paths) -> StoreReport {
         }
         if let Ok(n) = db::thread_count(&prof_db) {
             if n > 0 {
-                return report(StoreState::Split { threads_in_profile: n }, &base_db);
+                return report(
+                    StoreState::Split {
+                        threads_in_profile: n,
+                    },
+                    &base_db,
+                );
             }
         }
     }
@@ -128,7 +141,9 @@ pub fn sync_projects(p: &Paths, name: &str) -> Result<()> {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
     }
     let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     merge_global_state(
         &p.base.join(".codex-global-state.json"),
         &profile.join(".codex-global-state.json"),
@@ -149,7 +164,13 @@ fn report(state: StoreState, base_db: &std::path::Path) -> StoreReport {
             (Err(e), _) | (_, Err(e)) => (0, Vec::new(), Some(e.to_string())),
         }
     };
-    StoreReport { state, threads, projects, inodes: Vec::new(), error }
+    StoreReport {
+        state,
+        threads,
+        projects,
+        inodes: Vec::new(),
+        error,
+    }
 }
 
 use crate::error::{Error, Result};
@@ -276,7 +297,9 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     let mut inodes = Vec::new();
     if base_db.exists() {
         if !db::quick_check(&base_db)? {
-            return Err(Error::Msg("shared database failed PRAGMA quick_check".into()));
+            return Err(Error::Msg(
+                "shared database failed PRAGMA quick_check".into(),
+            ));
         }
         let base_ino = db::inode(&base_db)?;
         inodes.push(("base".to_string(), base_ino));
@@ -327,7 +350,11 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
         if dst.get(key).is_some_and(|v| !v.is_object()) {
             return Err(Error::Msg(format!("profile {key} must be an object")));
         }
-        let mut merged = dst.get(key).and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        let mut merged = dst
+            .get(key)
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
         for (k, v) in src_map {
             merged.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -338,23 +365,41 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
         if dst.get("project-order").is_some_and(|v| !v.is_array()) {
             return Err(Error::Msg("profile project-order must be an array".into()));
         }
-        let mut merged = dst.get("project-order").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let mut merged = dst
+            .get("project-order")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         for id in order {
-            if !merged.contains(id) { merged.push(id.clone()); }
+            if !merged.contains(id) {
+                merged.push(id.clone());
+            }
         }
         dst["project-order"] = serde_json::Value::Array(merged);
     }
 
     // Sidebar presentation only; never the identity block.
-    if dst.get("electron-persisted-atom-state").is_some_and(|v| !v.is_object()) {
+    if dst
+        .get("electron-persisted-atom-state")
+        .is_some_and(|v| !v.is_object())
+    {
         return Err(Error::Msg("profile atom state must be an object".into()));
     }
     if let (Some(s_atom), Some(d_atom)) = (
-        src.get("electron-persisted-atom-state").and_then(|v| v.as_object()),
-        Some(dst.get("electron-persisted-atom-state").and_then(|v| v.as_object()).cloned().unwrap_or_default()),
+        src.get("electron-persisted-atom-state")
+            .and_then(|v| v.as_object()),
+        Some(
+            dst.get("electron-persisted-atom-state")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default(),
+        ),
     ) {
         let mut atoms = d_atom;
-        for k in ["flat-project-sidebar-preferences-v1", "new-task-project-by-computer"] {
+        for k in [
+            "flat-project-sidebar-preferences-v1",
+            "new-task-project-by-computer",
+        ] {
             if let Some(v) = s_atom.get(k) {
                 atoms.entry(k.to_string()).or_insert_with(|| v.clone());
             }
@@ -373,18 +418,29 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
     }
     // Write alongside the destination and rename, so readers never see partial JSON.
     let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let temporary = target.with_file_name(format!(".codex-global-state-{}-{nonce}.tmp", std::process::id()));
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = target.with_file_name(format!(
+        ".codex-global-state-{}-{nonce}.tmp",
+        std::process::id()
+    ));
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let result = (|| -> Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&temporary, target)?;
         Ok(())
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
     result?;
     Ok(())
 }

@@ -24,8 +24,15 @@ fn repair_never_displaces_the_shared_db_through_a_symlinked_profile() {
 
     store::repair(&p, &p.backup_dir("s")).unwrap();
 
-    assert!(p.base.join("state_5.sqlite").exists(), "shared DB must survive");
-    assert_eq!(db::thread_count(&p.base.join("state_5.sqlite")).unwrap(), 1, "thread must survive");
+    assert!(
+        p.base.join("state_5.sqlite").exists(),
+        "shared DB must survive"
+    );
+    assert_eq!(
+        db::thread_count(&p.base.join("state_5.sqlite")).unwrap(),
+        1,
+        "thread must survive"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -40,14 +47,29 @@ fn merge_moves_session_files_into_the_base() {
     db::create_empty(&p.profiles.join("work/state_5.sqlite")).unwrap();
     let src = p.profiles.join("work/sessions/2026/10/chatA.jsonl");
     std::fs::write(&src, "{}\n").unwrap();
-    db::insert_thread(&p.profiles.join("work/state_5.sqlite"), "t1", &src.to_string_lossy()).unwrap();
+    db::insert_thread(
+        &p.profiles.join("work/state_5.sqlite"),
+        "t1",
+        &src.to_string_lossy(),
+    )
+    .unwrap();
 
     store::repair(&p, &p.backup_dir("s")).unwrap();
 
     let dest = p.base.join("sessions/2026/10/chatA.jsonl");
-    assert!(dest.exists(), "session file must be copied into the base, not left in backup");
-    let got = db::run_query(&p.base.join("state_5.sqlite"), "select rollout_path from threads;").unwrap();
-    assert!(got.contains(&dest.to_string_lossy().to_string()), "row must point at the copied file: {got:?}");
+    assert!(
+        dest.exists(),
+        "session file must be copied into the base, not left in backup"
+    );
+    let got = db::run_query(
+        &p.base.join("state_5.sqlite"),
+        "select rollout_path from threads;",
+    )
+    .unwrap();
+    assert!(
+        got.contains(&dest.to_string_lossy().to_string()),
+        "row must point at the copied file: {got:?}"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -59,12 +81,20 @@ fn repair_leaves_a_benign_auth_link_alone() {
     std::fs::create_dir_all(&p.base).unwrap();
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
     db::create_empty(&p.base.join("state_5.sqlite")).unwrap();
-    std::fs::write(p.profiles.join("work/auth.json"), r#"{"tokens":{"account_id":"w"}}"#).unwrap();
-    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
+    std::fs::write(
+        p.profiles.join("work/auth.json"),
+        r#"{"tokens":{"account_id":"w"}}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
 
     store::repair(&p, &p.backup_dir("s")).unwrap();
 
-    assert!(p.base.join("auth.json").is_symlink(), "benign link must be preserved");
+    assert!(
+        p.base.join("auth.json").is_symlink(),
+        "benign link must be preserved"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -77,14 +107,28 @@ fn repair_breaks_a_true_auth_cycle() {
     std::fs::create_dir_all(&p.profiles).unwrap();
     db::create_empty(&p.base.join("state_5.sqlite")).unwrap();
     std::os::unix::fs::symlink(&p.base, p.profiles.join("work")).unwrap();
-    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json")).unwrap();
-    assert!(matches!(store::inspect(&p).state, StoreState::AuthCycle), "precondition");
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
+    assert!(
+        matches!(store::inspect(&p).state, StoreState::AuthCycle),
+        "precondition"
+    );
 
     let r = store::repair(&p, &p.backup_dir("s")).unwrap();
 
-    assert!(!matches!(r.state, StoreState::AuthCycle), "must not still be a cycle: {:?}", r.state);
-    assert!(!p.base.join("auth.json").is_symlink(), "looped link must be moved aside");
-    assert!(p.base.join("state_5.sqlite").exists(), "DB must survive the auth repair");
+    assert!(
+        !matches!(r.state, StoreState::AuthCycle),
+        "must not still be a cycle: {:?}",
+        r.state
+    );
+    assert!(
+        !p.base.join("auth.json").is_symlink(),
+        "looped link must be moved aside"
+    );
+    assert!(
+        p.base.join("state_5.sqlite").exists(),
+        "DB must survive the auth repair"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -105,7 +149,10 @@ fn repair_does_not_displace_an_unreadable_profile_db() {
     if r.is_ok() {
         assert!(prof_db.is_symlink() || prof_db.exists());
     } else {
-        assert!(p.profiles.join("work/state_5.sqlite").exists(), "must not vanish on error");
+        assert!(
+            p.profiles.join("work/state_5.sqlite").exists(),
+            "must not vanish on error"
+        );
     }
     std::fs::remove_dir_all(&t).ok();
 }
@@ -139,8 +186,16 @@ c.commit()
 os._exit(0)
 "#.replace("__PATH__", &format!("{:?}", prof.display().to_string()))).unwrap();
 
-    let out = std::process::Command::new("python3").arg("-I").arg(&seed).output().unwrap();
-    assert!(out.status.success(), "seed failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = std::process::Command::new("python3")
+        .arg("-I")
+        .arg(&seed)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "seed failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let wal = format!("{}-wal", prof.display());
     let n = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
@@ -148,8 +203,11 @@ os._exit(0)
 
     store::repair(&p, &p.backup_dir("s")).unwrap();
 
-    let got = db::run_query(&p.base.join("state_5.sqlite"),
-        "select count(*) from threads where id='walrow';").unwrap();
+    let got = db::run_query(
+        &p.base.join("state_5.sqlite"),
+        "select count(*) from threads where id='walrow';",
+    )
+    .unwrap();
     assert_eq!(got.trim(), "1", "row living in the WAL must be merged");
     std::fs::remove_dir_all(&t).ok();
 }

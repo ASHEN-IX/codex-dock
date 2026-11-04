@@ -1,7 +1,9 @@
 use codex_dock_core::{accounts, store, usage, windows, Paths, StoreState};
 
 fn stamp() -> String {
-    let out = std::process::Command::new("date").arg("+%Y%m%d-%H%M%S").output();
+    let out = std::process::Command::new("date")
+        .arg("+%Y%m%d-%H%M%S")
+        .output();
     out.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "backup".to_string())
@@ -18,7 +20,9 @@ fn state_label(s: &StoreState) -> String {
     match s {
         StoreState::Shared => "shared".into(),
         StoreState::NotConfigured => "not configured".into(),
-        StoreState::Split { threads_in_profile } => format!("split ({threads_in_profile} threads in a profile)"),
+        StoreState::Split { threads_in_profile } => {
+            format!("split ({threads_in_profile} threads in a profile)")
+        }
         StoreState::AuthCycle => "auth cycle".into(),
         StoreState::Nested { profile } => format!("nested ({profile})"),
     }
@@ -30,11 +34,8 @@ fn cmd_status(p: &Paths) -> i32 {
     println!("threads:  {}", r.threads);
     println!("projects: {}", r.projects.join(", "));
     let accts = accounts::list(p).unwrap_or_default();
-    println!("\naccounts:");
-    for a in &accts {
-        let id = a.account_id.as_deref().unwrap_or("—");
-        println!("  {:<12} {} ({})", a.name, if a.logged_in { "logged in" } else { "signed out" }, id);
-    }
+    let signed_in = accts.iter().filter(|a| a.logged_in).count();
+    println!("{}", status_counts_line(accts.len(), signed_in));
     if matches!(r.state, StoreState::Shared) {
         0
     } else {
@@ -42,21 +43,61 @@ fn cmd_status(p: &Paths) -> i32 {
     }
 }
 
+/// The diagnostic renderer accepts only counts, never credential-bearing models.
+fn status_counts_line(configured: usize, signed_in: usize) -> String {
+    format!("accounts: {configured} configured, {signed_in} signed in")
+}
+
+/// Process IDs are enough to identify windows without exporting account
+/// metadata or per-window paths into captured terminal logs.
+fn running_line(window: &windows::WindowProc) -> String {
+    format!("pid {}", window.pid)
+}
+
+fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
+    let filter = match account
+        .map(|name| accounts::canonical_name(p, name))
+        .transpose()
+    {
+        Ok(name) => name,
+        Err(e) => {
+            eprintln!("could not select profile: {e}");
+            return 1;
+        }
+    };
+    for window in windows::running_for(p, std::path::Path::new("/proc")) {
+        if filter.as_ref().is_none_or(|name| *name == window.account) {
+            println!("{}", running_line(&window));
+        }
+    }
+    0
+}
+
 fn cmd_usage(p: &Paths, with_usage: bool) -> i32 {
     let accts = accounts::list(p).unwrap_or_default();
-    println!("{:<12} {:<8} {:>7} {:>7} {:>9}", "account", "plan", "5-hour", "weekly", "credits");
+    println!(
+        "{:<12} {:<8} {:>7} {:>7} {:>9}",
+        "account", "plan", "5-hour", "weekly", "credits"
+    );
     for a in &accts {
-        let u = if with_usage { Some(usage::read(p, &a.name, now())) } else { None };
+        let u = if with_usage {
+            Some(usage::read(p, &a.name, now()))
+        } else {
+            None
+        };
         match u {
             Some(u) => {
-                let pct = |v: Option<f64>| v.map(|x| format!("{x:.1}%")).unwrap_or_else(|| "—".into());
+                let pct =
+                    |v: Option<f64>| v.map(|x| format!("{x:.1}%")).unwrap_or_else(|| "—".into());
                 println!(
                     "{:<12} {:<8} {:>7} {:>7} {:>9}",
                     a.name,
                     u.plan.as_deref().unwrap_or("—"),
                     pct(u.five_hour_percent),
                     pct(u.weekly_percent),
-                    u.credits.map(|c| format!("{c:.1}")).unwrap_or_else(|| "—".into())
+                    u.credits
+                        .map(|c| format!("{c:.1}"))
+                        .unwrap_or_else(|| "—".into())
                 );
                 if let Some(e) = u.error {
                     println!("  ! {e}");
@@ -161,7 +202,7 @@ fn main() {
         Some("status") | None => cmd_status(&p),
         Some("list") => {
             for a in accounts::list(&p).unwrap_or_default() {
-                println!("{}\t{}", a.name, a.account_id.unwrap_or_default());
+                println!("{}", a.name);
             }
             0
         }
@@ -187,7 +228,7 @@ fn main() {
         Some("launch") => match args.get(1) {
             Some(name) => match windows::launch(&p, name) {
                 Ok(w) => {
-                    println!("opened {} (pid {})", w.account, w.pid);
+                    println!("opened window (pid {})", w.pid);
                     0
                 }
                 Err(e) => {
@@ -200,12 +241,7 @@ fn main() {
                 1
             }
         },
-        Some("running") => {
-            for w in windows::running_for(&p, std::path::Path::new("/proc")) {
-                println!("{}\t{}\tpid {}", w.account, w.user_data_dir.display(), w.pid);
-            }
-            0
-        }
+        Some("running") => cmd_running(&p, args.get(1).map(String::as_str)),
         Some("add") => match args.get(1) {
             Some(name) => cmd_add(&p, name, args.get(2).map(|s| s.as_str())),
             None => {
@@ -231,10 +267,49 @@ fn main() {
             eprintln!("unknown command '{other}'");
             eprintln!(
                 "commands: status | list | usage | add <name> [clone] | remove <name> | \
-                 login <name> | repair | launch <name> | running"
+                 login <name> | repair | launch <name> | running [name]"
             );
             1
         }
     };
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn routine_status_does_not_disclose_account_metadata() {
+        let account = accounts::Account {
+            name: "work".into(),
+            path: PathBuf::from("/home/private-user/.codex-profiles/work"),
+            account_id: Some("sensitive-provider-identifier".into()),
+            logged_in: true,
+        };
+        let accounts = [account];
+        let line = status_counts_line(
+            accounts.len(),
+            accounts.iter().filter(|a| a.logged_in).count(),
+        );
+        assert!(line.contains("1 configured, 1 signed in"));
+        assert!(!line.contains("work"));
+        assert!(!line.contains("sensitive-provider-identifier"));
+        assert!(!line.contains("private-user"));
+    }
+
+    #[test]
+    fn running_output_does_not_disclose_process_account_metadata() {
+        let window = windows::WindowProc {
+            pid: 42,
+            account: "private-account-label".into(),
+            user_data_dir: PathBuf::from("/home/private-user/.config/Codex-private-account-label"),
+        };
+        let line = running_line(&window);
+        assert!(line.contains("42"));
+        assert!(!line.contains("private-account-label"));
+        assert!(!line.contains("private-user"));
+        assert!(!line.contains("Codex-"));
+    }
 }

@@ -1,5 +1,11 @@
 # Codex Dock
 
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md),
+[security reporting](SECURITY.md), and the [community conduct](CODE_OF_CONDUCT.md).
+CI tests and builds the Linux app without using real account credentials.
+Maintainer settings and draft releases are documented in
+[docs/maintaining.md](docs/maintaining.md).
+
 A desktop app for people running more than one Codex account on one machine. It
 lists accounts, launches each in its own Codex Desktop window, and reports
 per-account usage from a tray icon — all windows sharing one chat store.
@@ -93,13 +99,19 @@ make cli
 | Command | What it does |
 |---|---|
 | `status` | Store health, thread/project counts, accounts and login state |
-| `list` | One line per account: name and account id |
+| `list` | Local profile names; provider account IDs are omitted |
 | `usage` | Per-account plan, 5-hour %, weekly %, credits |
 | `launch <name>` | Open Codex Desktop for one account |
-| `running` | Windows currently open, mapped back to accounts |
+| `running [name]` | PIDs of open windows, optionally filtered by a local profile name |
 | `repair` | Verify and repair the shared store, writing a backup |
 
 `status` against a healthy store writes nothing.
+
+Routine CLI output omits provider account IDs and per-window data paths so they
+do not end up in captured terminal logs. `status` summarizes configured/signed-in
+account counts; use `list` to request local profile names. `running` prints process IDs; use
+`codex-dock-cli running work` to select one local profile without printing its
+process-derived account metadata. `launch` reports the opened window's PID.
 
 ## How the shared store works
 

@@ -9,7 +9,10 @@ pub fn desktop() -> PathBuf {
     )
 }
 
-fn find_desktop(override_bin: Option<&std::ffi::OsStr>, paths: Option<&std::ffi::OsStr>) -> PathBuf {
+fn find_desktop(
+    override_bin: Option<&std::ffi::OsStr>,
+    paths: Option<&std::ffi::OsStr>,
+) -> PathBuf {
     if let Some(bin) = override_bin.filter(|s| !s.is_empty()) {
         return PathBuf::from(bin);
     }
@@ -17,7 +20,9 @@ fn find_desktop(override_bin: Option<&std::ffi::OsStr>, paths: Option<&std::ffi:
         for dir in std::env::split_paths(paths) {
             for name in ["chatgpt", "codex-desktop", "ChatGPT"] {
                 let candidate = dir.join(name);
-                if is_executable(&candidate) { return candidate; }
+                if is_executable(&candidate) {
+                    return candidate;
+                }
             }
         }
     }
@@ -83,7 +88,10 @@ mod tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find_desktop(None, Some(dir.as_os_str())), binary);
         let custom = OsStr::new("/home/a user/Apps/Codex.AppImage");
-        assert_eq!(find_desktop(Some(custom), Some(dir.as_os_str())), PathBuf::from(custom));
+        assert_eq!(
+            find_desktop(Some(custom), Some(dir.as_os_str())),
+            PathBuf::from(custom)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
