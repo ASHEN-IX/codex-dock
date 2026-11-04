@@ -17,3 +17,4 @@ auth.json.*
 *.sqlite-*
 audit-report.json
 release-artifacts/
+codex-dock-backup-*/

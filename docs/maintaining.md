@@ -19,12 +19,15 @@ apply GitHub settings; a contribution cannot change the upstream owner's setting
 
 ## Protect main
 
-Require pull requests and passing **CI gate**, resolve review conversations,
+Require pull requests and passing **CI gate** and **Rust dependency audit**,
+resolve review conversations,
 and disallow branch deletion and force pushes. Human review requirements should
 match the active maintainer team: requiring a second reviewer in a solo-maintainer
 fork can prevent every merge. Require an independent reviewer when one is available.
 
-Keep status-check names stable. The `CI gate` job fails if any required quality
+Bind required statuses to the GitHub Actions application so a different status
+provider cannot satisfy them accidentally. Keep status-check names stable. The
+`CI gate` job fails if any required quality
 or Linux matrix check fails, is cancelled, or is skipped. Security jobs run
 separately so findings stay visible. Review their results before merging; CodeQL
 upload success means analysis completed, not that no findings exist.
