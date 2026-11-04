@@ -52,7 +52,7 @@ impl Settings {
             && self
                 .records
                 .get(id)
-                .map_or(true, |r| r.next_at.is_some_and(|t| t <= now))
+                .is_none_or(|r| r.next_at.is_some_and(|t| t <= now))
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
