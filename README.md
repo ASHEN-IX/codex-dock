@@ -72,7 +72,8 @@ make cli
 `status` against a healthy store writes nothing.
 
 Routine CLI output omits provider account IDs and per-window data paths so they
-do not end up in captured terminal logs. `running` prints process IDs; use
+do not end up in captured terminal logs. `status` summarizes configured/signed-in
+account counts; use `list` to request local profile names. `running` prints process IDs; use
 `codex-dock-cli running work` to select one local profile without printing its
 process-derived account metadata. `launch` reports the opened window's PID.
 
