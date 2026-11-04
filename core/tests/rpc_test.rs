@@ -23,7 +23,10 @@ fn initialize_carries_the_required_client_info() {
         "initialize",
         r#"{"clientInfo":{"name":"codex-dock","version":"0.1.0"}}"#,
     );
-    assert!(req.contains("clientInfo"), "clientInfo is required: {req:?}");
+    assert!(
+        req.contains("clientInfo"),
+        "clientInfo is required: {req:?}"
+    );
     assert!(req.contains("\"name\":\"codex-dock\""));
     assert!(req.contains("\"version\""));
 }
@@ -37,7 +40,8 @@ fn notification_has_no_id() {
 
 #[test]
 fn decodes_a_jsonl_response_by_id() {
-    let body = r#"{"jsonrpc":"2.0","id":7,"result":{"rateLimits":{"primary":{"usedPercent":87.5}}}}"#;
+    let body =
+        r#"{"jsonrpc":"2.0","id":7,"result":{"rateLimits":{"primary":{"usedPercent":87.5}}}}"#;
     let v = rpc::decode_response(body, 7).unwrap();
     assert_eq!(
         v.get("rateLimits")
@@ -51,7 +55,8 @@ fn decodes_a_jsonl_response_by_id() {
 #[test]
 fn decode_skips_the_initialize_reply_and_matches_the_right_id() {
     let init = r#"{"jsonrpc":"2.0","id":1,"result":{"userAgent":"x"}}"#;
-    let want = r#"{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"secondary":{"usedPercent":40}}}}"#;
+    let want =
+        r#"{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"secondary":{"usedPercent":40}}}}"#;
     let raw = format!("{init}\n{want}\n");
     let v = rpc::decode_response(&raw, 2).unwrap();
     assert_eq!(

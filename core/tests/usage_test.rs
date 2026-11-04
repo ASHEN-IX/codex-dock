@@ -33,7 +33,11 @@ fn parses_the_real_rate_limits_shape() {
 
 #[test]
 fn missing_fields_stay_none_never_zero() {
-    let u = usage::parse_rate_limits("work", r#"{"rateLimits":{"secondary":{"usedPercent":40}}}"#, 5);
+    let u = usage::parse_rate_limits(
+        "work",
+        r#"{"rateLimits":{"secondary":{"usedPercent":40}}}"#,
+        5,
+    );
     assert_eq!(u.five_hour_percent, None, "absent must not become 0");
     assert_eq!(u.credits, None);
     assert_eq!(u.plan, None);
@@ -70,8 +74,14 @@ fn malformed_json_yields_error_and_no_numbers() {
 
 #[test]
 fn worst_color_uses_the_highest_five_hour_percent() {
-    assert_eq!(usage::worst_color(&[stub(Some(10.0)), stub(Some(70.0))]), Color::Amber);
-    assert_eq!(usage::worst_color(&[stub(Some(10.0)), stub(Some(90.0))]), Color::Red);
+    assert_eq!(
+        usage::worst_color(&[stub(Some(10.0)), stub(Some(70.0))]),
+        Color::Amber
+    );
+    assert_eq!(
+        usage::worst_color(&[stub(Some(10.0)), stub(Some(90.0))]),
+        Color::Red
+    );
     assert_eq!(usage::worst_color(&[stub(Some(10.0))]), Color::Green);
     assert_eq!(usage::worst_color(&[stub(None)]), Color::Neutral);
     assert_eq!(usage::worst_color(&[]), Color::Neutral);
@@ -160,9 +170,16 @@ fn a_failed_refresh_retains_the_previous_numbers_and_marks_them_stale() {
     fresh.error = Some("app-server unavailable".into());
 
     let kept = usage::retain_last(fresh, Some(&prev));
-    assert_eq!(kept.five_hour_percent, Some(55.0), "must not fall back to 0");
+    assert_eq!(
+        kept.five_hour_percent,
+        Some(55.0),
+        "must not fall back to 0"
+    );
     assert_eq!(kept.weekly_percent, Some(58.0));
-    assert_eq!(kept.checked_at, 1000, "age is measured from the real reading");
+    assert_eq!(
+        kept.checked_at, 1000,
+        "age is measured from the real reading"
+    );
     assert!(kept.stale);
     assert!(kept.error.is_some(), "the cause is still reported");
 }

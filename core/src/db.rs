@@ -3,13 +3,17 @@ use std::path::Path;
 use std::process::Command;
 
 fn run(db: &Path, sql: &str) -> Result<String> {
-    let out = Command::new("sqlite3").arg(db).arg(sql).output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::Msg("sqlite3 not found in PATH".into())
-        } else {
-            Error::Io(e)
-        }
-    })?;
+    let out = Command::new("sqlite3")
+        .arg(db)
+        .arg(sql)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::Msg("sqlite3 not found in PATH".into())
+            } else {
+                Error::Io(e)
+            }
+        })?;
     if !out.status.success() {
         return Err(Error::Msg(format!(
             "sqlite3 failed: {}",
@@ -21,7 +25,9 @@ fn run(db: &Path, sql: &str) -> Result<String> {
 
 fn scalar(db: &Path, sql: &str) -> Result<usize> {
     let out = run(db, sql)?;
-    out.trim().parse::<usize>().map_err(|_| Error::Msg(format!("unexpected sqlite output: {out:?}")))
+    out.trim()
+        .parse::<usize>()
+        .map_err(|_| Error::Msg(format!("unexpected sqlite output: {out:?}")))
 }
 
 pub fn thread_count(db: &Path) -> Result<usize> {
@@ -36,7 +42,11 @@ pub fn project_names(db: &Path) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let out = run(db, "select name from projects order by position;")?;
-    Ok(out.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
 }
 
 pub fn quick_check(db: &Path) -> Result<bool> {
@@ -59,9 +69,10 @@ pub fn create_empty(db: &Path) -> Result<()> {
 }
 
 pub fn insert_thread(db: &Path, id: &str, rollout: &str) -> Result<()> {
-    run(db, &format!(
-        "insert into threads (id, rollout_path) values ('{id}', '{rollout}');"
-    ))?;
+    run(
+        db,
+        &format!("insert into threads (id, rollout_path) values ('{id}', '{rollout}');"),
+    )?;
     Ok(())
 }
 

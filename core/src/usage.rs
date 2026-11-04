@@ -182,7 +182,10 @@ pub struct Cache {
 
 impl Cache {
     pub fn new(ttl: i64) -> Cache {
-        Cache { ttl, entries: HashMap::new() }
+        Cache {
+            ttl,
+            entries: HashMap::new(),
+        }
     }
 
     pub fn get(&self, account: &str, now: i64) -> Option<&Usage> {
@@ -207,17 +210,22 @@ impl Cache {
 /// A cache that can be shared across threads, and the single place a reading is
 /// refreshed. Holding the lock only to look up or store a value keeps the UI
 /// responsive while an account is slow to answer.
+type RefreshGate = Arc<(Mutex<bool>, Condvar)>;
+
 #[derive(Debug)]
 pub struct Shared {
     inner: Mutex<Cache>,
     /// Serialises refreshes of one account so the window and the tray tick
     /// cannot both spawn an app-server for it.
-    refreshes: Mutex<HashMap<String, Arc<(Mutex<bool>, Condvar)>>>,
+    refreshes: Mutex<HashMap<String, RefreshGate>>,
 }
 
 impl Shared {
     pub fn new(ttl: i64) -> Shared {
-        Shared { inner: Mutex::new(Cache::new(ttl)), refreshes: Mutex::new(HashMap::new()) }
+        Shared {
+            inner: Mutex::new(Cache::new(ttl)),
+            refreshes: Mutex::new(HashMap::new()),
+        }
     }
 
     /// A reading from the last `ttl` seconds, if one was recorded.
@@ -286,8 +294,7 @@ impl Shared {
 
 /// Transport seam: fetch every reply needed for one account in a single
 /// app-server session, returning the raw newline-delimited transcript.
-pub type Transport<'a> =
-    dyn Fn(&std::path::Path) -> std::result::Result<String, String> + 'a;
+pub type Transport<'a> = dyn Fn(&std::path::Path) -> std::result::Result<String, String> + 'a;
 
 pub fn read_with(
     account: &str,
@@ -332,9 +339,8 @@ pub fn read_with(
 
 pub fn read(p: &Paths, account: &str, now: i64) -> Usage {
     let home = p.profiles.join(account);
-    let transport = |home: &std::path::Path| -> std::result::Result<String, String> {
-        proxy_request(home)
-    };
+    let transport =
+        |home: &std::path::Path| -> std::result::Result<String, String> { proxy_request(home) };
     read_with(account, &home, now, &transport)
 }
 

@@ -1,0 +1,10 @@
+name: Linux build dependencies
+description: Install the native dependencies needed by the GTK3 Tauri shell
+runs:
+  using: composite
+  steps:
+    - name: Install GTK3, WebKitGTK and SQLite
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y build-essential pkg-config sqlite3 libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libssl-dev libdbus-1-dev librsvg2-dev patchelf

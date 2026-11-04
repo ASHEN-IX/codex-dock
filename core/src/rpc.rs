@@ -30,10 +30,16 @@ pub fn decode_line(line: &str, want_id: u64) -> Option<Result<serde_json::Value>
         return None;
     }
     if let Some(err) = v.get("error") {
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
         return Some(Err(Error::Msg(format!("app-server error: {msg}"))));
     }
-    Some(Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null)))
+    Some(Ok(v
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)))
 }
 
 /// Scan a whole captured transcript for the reply to `want_id`.

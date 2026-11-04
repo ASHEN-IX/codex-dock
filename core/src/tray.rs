@@ -57,7 +57,13 @@ pub fn menu_rows(usages: &[Usage]) -> Vec<MenuRow> {
         .map(|u| {
             let plan = u.plan.as_deref().unwrap_or("—");
             MenuRow {
-                label: format!("{} · {} 5h {} · {}", u.account, plan, pct(u.five_hour_percent), pct(u.weekly_percent)),
+                label: format!(
+                    "{} · {} 5h {} · {}",
+                    u.account,
+                    plan,
+                    pct(u.five_hour_percent),
+                    pct(u.weekly_percent)
+                ),
                 account: u.account.clone(),
             }
         })
@@ -83,7 +89,10 @@ pub fn menu_rows_at(usages: &[Usage], now: i64) -> Vec<MenuRow> {
             } else if u.error.is_some() {
                 label.push_str(" · unavailable");
             }
-            MenuRow { label, account: u.account.clone() }
+            MenuRow {
+                label,
+                account: u.account.clone(),
+            }
         })
         .collect()
 }
@@ -191,7 +200,11 @@ pub fn gauge_icon(percent: Option<f64>, color: Color, size: u32) -> Icon {
             }
         }
     }
-    Icon { width: size, height: size, rgba }
+    Icon {
+        width: size,
+        height: size,
+        rgba,
+    }
 }
 
 /// The worst 5-hour percentage across accounts, or `None` when no account has

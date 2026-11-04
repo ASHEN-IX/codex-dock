@@ -36,7 +36,8 @@ pub fn is_device_code(s: &str) -> bool {
     };
     let ok = |p: &str| {
         (3..=6).contains(&p.len())
-            && p.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            && p.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
     };
     ok(a) && ok(b)
 }
@@ -50,8 +51,7 @@ pub fn parse_device_code(raw: &str) -> (Option<String>, Option<String>) {
         let t = line.trim();
         if url.is_none() {
             if let Some(i) = t.find("https://") {
-                let candidate: String =
-                    t[i..].chars().take_while(|c| !c.is_whitespace()).collect();
+                let candidate: String = t[i..].chars().take_while(|c| !c.is_whitespace()).collect();
                 if candidate.contains("device") {
                     url = Some(candidate);
                 }
