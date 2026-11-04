@@ -44,16 +44,29 @@ Artifacts need distribution-specific runtime validation before declaring support
 
 - **Ping** sends one minimal message for a signed-in account to open an idle
   usage window, then refreshes the server's usage and reset time. It uses
-  allowance. API-key profiles are excluded. If the server already reports an
-  active window or no five-hour window at all, no message is sent.
+  allowance. API-key profiles are excluded. An explicit click sends one message,
+  even if a usage reset time already exists. The actual model reply confirms
+  delivery. This is a background request; use **Open** to open a desktop window.
   It never resets an active limit or invents a five-hour countdown. Missing or
   delayed reset times remain unconfirmed until a fresh server reading arrives.
   Requires Codex CLI 0.166 or later with `exec --ignore-user-config` support.
   Pings run in a temporary directory, with ephemeral history, read-only sandbox,
   ignored user config/rules and disabled shell, hooks, plugins and delegation.
-  There is a one-minute cooldown per account, a 90-second timeout, and no
-  schedules or automatic retries. A failed/timed-out request may still use
+  Manual Ping has a one-minute cooldown per account, a 90-second timeout,
+  and no automatic retries. A failed/timed-out request may still use
   allowance. Existing projects, config and saved chats are not used as context.
+
+- **Auto-ping** is a separate saved setting, off by default. Enabling it sends
+  one background ping to each eligible account that Dock has not pinged for the
+  current period. While Dock is running (including docked in the tray), it checks
+  every minute and sends again only after a successfully recorded server reset
+  time has passed. Successful manual pings count too, including after a restart.
+  Accounts with unavailable usage, no five-hour limit, or exhausted allowance
+  are skipped. Unknown reset times, failures and interrupted requests pause the
+  account; use manual Ping, or toggle the option off and on to retry failures.
+  Turning it off stops future automatic requests; an in-flight ping may finish.
+  Each row shows its last reply or error. This uses allowance, and does not open
+  desktop windows or reset an existing usage period.
 
 - **Closing the window docks it.** The tray keeps ticking and keeps the usage
   numbers live; the process keeps running. Quit from the tray menu.

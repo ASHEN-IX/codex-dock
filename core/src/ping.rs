@@ -29,11 +29,11 @@ impl Drop for Workspace {
 
 /// Runs only after a user clicks Ping. Uses the account's credentials directly
 /// so token refreshes are not lost in a throwaway credential copy.
-pub fn send(p: &Paths, name: &str) -> Result<()> {
+pub fn send(p: &Paths, name: &str) -> Result<String> {
     send_with(p, name, &crate::tool::codex(), Duration::from_secs(90))
 }
 
-fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<()> {
+fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<String> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     // Resolve from the actual account list, never from an unchecked path input.
     let account = accounts::list(p)?.into_iter().find(|a| a.name == name && a.logged_in && a.account_id.is_some())
@@ -52,12 +52,21 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
     std::fs::DirBuilder::new().mode(0o700).create(&workspace.0)?;
     // Keep failed attempts in the cooldown too: errors must not cause repeat spending.
     std::fs::write(&stamp, now.as_secs().to_string())?;
-    let mut child = command(binary, &account.path, &workspace.0).spawn()
+    let output = workspace.0.join("reply.txt");
+    let mut child = command(binary, &account.path, &workspace.0)
+        .args(["--output-last-message"]).arg(&output).spawn()
         .map_err(|e| Error::Msg(format!("Could not start Codex for the ping: {e}")))?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return if status.success() { Ok(()) } else {
+            Ok(Some(status)) => return if status.success() {
+                let reply = std::fs::read_to_string(&output).unwrap_or_default();
+                if reply.trim().is_empty() {
+                    Err(Error::Msg("Codex exited without a reply. Ping delivery is unconfirmed; refresh usage before retrying.".into()))
+                } else {
+                    Ok(reply.trim().chars().take(200).collect())
+                }
+            } else {
                 Err(Error::Msg("Ping failed. Check account access, remaining usage, network, and that Codex CLI supports exec --ignore-user-config. No automatic retry was sent.".into()))
             },
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(100)),
@@ -87,10 +96,10 @@ mod tests {
         let credentials = r#"{"tokens":{"account_id":"fake-account"}}"#;
         std::fs::write(&auth, credentials).unwrap();
         let binary = root.join("fake-codex");
-        std::fs::write(&binary, "#!/bin/sh\n[ \"$CODEX_HOME\" != \"$PWD\" ] || exit 2\n[ ! -f ./auth.json ] || exit 3\nexit 0\n").unwrap();
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$CODEX_HOME\" != \"$PWD\" ] || exit 2\n[ ! -f ./auth.json ] || exit 3\nwhile [ $# -gt 0 ]; do\n if [ \"$1\" = --output-last-message ]; then shift; printf pong > \"$1\"; fi\n shift\ndone\nexit 0\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(send_with(&p, "../one", &binary, Duration::from_secs(1)).is_err());
-        send_with(&p, "one", &binary, Duration::from_secs(1)).unwrap();
+        assert_eq!(send_with(&p, "one", &binary, Duration::from_secs(1)).unwrap(), "pong");
         assert_eq!(std::fs::read_to_string(auth).unwrap(), credentials);
         assert!(!p.profiles.join("one/sessions").exists());
         assert!(send_with(&p, "one", &binary, Duration::from_secs(1)).unwrap_err().to_string().contains("Wait a minute"));
@@ -118,6 +127,7 @@ mod tests {
         for (name, script, expected) in [
             ("failure", "#!/bin/sh\nexit 1\n", "Ping failed"),
             ("timeout", "#!/bin/sh\nexec sleep 5\n", "timed out"),
+            ("empty", "#!/bin/sh\nexit 0\n", "without a reply"),
         ] {
             accounts::create(&p, name, None).unwrap();
             std::fs::write(p.profiles.join(name).join("auth.json"), format!(r#"{{"tokens":{{"account_id":"{name}"}}}}"#)).unwrap();

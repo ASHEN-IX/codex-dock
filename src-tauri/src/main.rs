@@ -10,6 +10,62 @@ use tauri::{Emitter, Manager};
 /// thread so the two can never show different numbers for the same account.
 struct UsageCache(usage::Shared);
 
+struct AutoPingState {
+    settings: Mutex<codex_dock_core::automation::Settings>,
+    path: std::path::PathBuf,
+}
+
+#[tauri::command]
+fn auto_ping_settings(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<AutoPingState>();
+    let settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
+    serde_json::to_value(&*settings).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_auto_ping(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AutoPingState>();
+    let mut settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
+    let mut updated = settings.clone();
+    updated.set_enabled(enabled);
+    updated.save(&state.path).map_err(|e| e.to_string())?;
+    *settings = updated;
+    drop(settings);
+    if enabled {
+        let handle = app.clone();
+        std::thread::spawn(move || auto_ping_tick(&handle));
+    }
+    Ok(())
+}
+
+fn auto_ping_tick(app: &tauri::AppHandle) {
+    let p = Paths::real();
+    for account in accounts::list(&p).unwrap_or_default() {
+        let Some(id) = account.account_id.as_ref().filter(|_| account.logged_in) else { continue };
+        let state = app.state::<AutoPingState>();
+        if !state.settings.lock().unwrap_or_else(|e| e.into_inner()).enabled { return; }
+        let usage = app.state::<UsageCache>().0.get_or_read(&p, &account.name, now);
+        if usage.stale || usage.error.is_some() || usage.five_hour_percent.is_none()
+            || usage.five_hour_percent.is_some_and(|n| n >= 100.0)
+            || usage.weekly_percent.is_some_and(|n| n >= 100.0) { continue; }
+        {
+            let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+            if !settings.enabled { return; }
+            if !settings.due(id, now()) { continue; }
+            settings.records.insert(id.clone(), codex_dock_core::automation::Record {
+                attempted_at: now(), ..Default::default()
+            });
+            // Reserve durably before sending: interrupted requests never loop.
+            if let Err(e) = settings.save(&state.path) {
+                settings.enabled = false;
+                eprintln!("Auto-ping paused: could not save settings: {e}");
+                return;
+            }
+        }
+        let _ = perform_ping(app, &account.name);
+    }
+}
+
 const CACHE_TTL_SECS: i64 = 60;
 
 /// Namespaced so the tray's D-Bus object path cannot collide with another
@@ -347,16 +403,17 @@ fn store_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn usage_all(state: tauri::State<'_, UsageCache>) -> serde_json::Value {
-    let p = Paths::real();
-    // No lock is held across the reads: with the cache lock held, three slow
-    // app-server round trips would freeze the window for half a minute.
-    let mut rows = Vec::new();
-    for account in accounts::list(&p).unwrap_or_default() {
-        let u = state.0.get_or_read(&p, &account.name, now);
-        rows.push(usage_json(&u, now()));
-    }
-    serde_json::json!(rows)
+async fn usage_all(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = Paths::real();
+        let state = app.state::<UsageCache>();
+        let mut rows = Vec::new();
+        for account in accounts::list(&p).unwrap_or_default() {
+            let u = state.0.get_or_read(&p, &account.name, now);
+            rows.push(usage_json(&u, now()));
+        }
+        serde_json::json!(rows)
+    }).await.map_err(|e| format!("Usage refresh failed: {e}"))
 }
 
 fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
@@ -379,27 +436,35 @@ fn usage_json(u: &usage::Usage, now: i64) -> serde_json::Value {
 
 #[tauri::command]
 async fn ping_account(account: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || perform_ping(&app, &account))
+        .await.map_err(|e| format!("Ping worker failed: {e}"))?
+}
+
+fn perform_ping(app: &tauri::AppHandle, account: &str) -> Result<serde_json::Value, String> {
         let p = Paths::real();
         let cache = app.state::<UsageCache>();
-        if !accounts::list(&p).map_err(|e| e.to_string())?
-            .iter().any(|a| a.name == account && a.logged_in && a.account_id.is_some()) {
-            return Err("Ping requires a signed-in ChatGPT account, not an API-key profile.".to_string());
+        let identity = accounts::list(&p).map_err(|e| e.to_string())?
+            .into_iter().find(|a| a.name == account && a.logged_in)
+            .and_then(|a| a.account_id)
+            .ok_or("Ping requires a signed-in ChatGPT account, not an API-key profile.")?;
+        let started = now();
+        // A future reset time is quota metadata, not evidence of a running
+        // desktop window or a previously delivered ping. An explicit click sends.
+        let result = codex_dock_core::ping::send(&p, account);
+        cache.0.forget(account);
+        let after = cache.0.get_or_read(&p, account, now);
+        let state = app.state::<AutoPingState>();
+        let mut settings = state.settings.lock().map_err(|_| "Auto-ping settings unavailable")?;
+        let mut warning = None;
+        let newer_success = result.is_err() && settings.records.get(&identity)
+            .is_some_and(|r| r.reply.is_some() && r.attempted_at >= started);
+        if !newer_success {
+            let reset = if after.error.is_none() && !after.stale { after.resets_at } else { None };
+            settings.complete(&identity, now(), result.as_ref().ok().cloned(), result.as_ref().err().map(|e| e.to_string()), reset);
+            if let Err(e) = settings.save(&state.path) { warning = Some(format!("Could not save ping status: {e}")); }
         }
-        let before = cache.0.get_or_read(&p, &account, now);
-        // An active window needs no extra request. Never manufacture a new reset time.
-        if !before.stale && before.error.is_none() && before.resets_at.is_some_and(|t| t > now()) {
-            return Ok(serde_json::json!({"sent": false, "usage": usage_json(&before, now())}));
-        }
-        if !before.stale && before.error.is_none() && before.five_hour_percent.is_none() {
-            return Err("The server does not report a five-hour window for this account. No ping sent.".into());
-        }
-        let result = codex_dock_core::ping::send(&p, &account);
-        cache.0.forget(&account);
-        let after = cache.0.get_or_read(&p, &account, now);
-        result.map_err(|e| e.to_string())?;
-        Ok(serde_json::json!({"sent": true, "usage": usage_json(&after, now())}))
-    }).await.map_err(|e| format!("Ping worker failed: {e}"))?
+        let reply = result.map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({"sent": true, "reply": reply, "usage": usage_json(&after, now()), "warning": warning}))
 }
 
 #[tauri::command]
@@ -472,6 +537,17 @@ fn main() {
         .manage(UsageCache(usage::Shared::new(CACHE_TTL_SECS)))
         .manage(LoginState::default())
         .setup(|app| {
+            let path = app.path().app_config_dir()?.join("auto-ping.json");
+            let settings = codex_dock_core::automation::Settings::load(&path).unwrap_or_else(|e| {
+                eprintln!("Auto-ping disabled: {e}");
+                Default::default()
+            });
+            app.manage(AutoPingState { settings: Mutex::new(settings), path });
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                auto_ping_tick(&handle);
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
             // Rebuilt on every refresh: a menu built once would show stale limits.
             let app_for_menu = app.handle().clone();
             let build_menu = move || -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -480,7 +556,7 @@ fn main() {
                 let accounts = accounts::list(&p).unwrap_or_default();
                 let cache = &app_for_menu.state::<UsageCache>().0;
                 let usages: Vec<_> =
-                    accounts.iter().map(|a| cache.get_or_read(&p, &a.name, now)).collect();
+                    accounts.iter().map(|a| cache.last(&a.name).unwrap_or_else(|| usage::Usage::empty(&a.name, 0))).collect();
                 let signed_in: Vec<String> =
                     accounts.iter().filter(|a| a.logged_in).map(|a| a.name.clone()).collect();
                 let is_in = |name: &str| signed_in.iter().any(|n| n == name);
@@ -590,12 +666,11 @@ fn main() {
                 let h = app.handle().clone();
                 let rebuild = std::sync::Arc::clone(&menu_for_refresh);
                 std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(60));
                     refresh_tray(&h, rebuild.as_ref());
+                    std::thread::sleep(std::time::Duration::from_secs(60));
                 });
             }
 
-            refresh_tray(app.handle(), menu_for_refresh.as_ref());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -615,6 +690,8 @@ fn main() {
             store_status,
             usage_all,
             ping_account,
+            auto_ping_settings,
+            set_auto_ping,
             open_window,
             repair_store
         ])

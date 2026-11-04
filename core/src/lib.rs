@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod automation;
 pub mod db;
 pub mod error;
 pub mod login;
