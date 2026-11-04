@@ -60,6 +60,15 @@ fn command(binary: &Path, profile: &Path, workspace: &Path) -> Command {
     cmd
 }
 
+// Explicitly unlock before closing: another thread may fork while a ping holds
+// the lock, briefly keeping the same open file description alive in its child.
+struct PingLock(std::fs::File);
+impl Drop for PingLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 struct Workspace(std::path::PathBuf);
 impl Drop for Workspace {
     fn drop(&mut self) {
@@ -90,6 +99,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
         .open(account.path.join(".dock-ping.lock"))?;
     lock.try_lock()
         .map_err(|_| Error::Msg("A ping is already running for this account.".into()))?;
+    let _lock = PingLock(lock);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -152,6 +162,27 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn ping_lock_releases_even_when_a_fork_keeps_its_file_description() {
+        let path = std::env::temp_dir().join(format!("dock-ping-lock-test-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.try_lock().unwrap();
+        let guard = PingLock(file);
+        let inherited = guard.0.try_clone().unwrap();
+        drop(guard);
+        let next = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        next.try_lock()
+            .expect("a completed ping must release its lock before inherited descriptors close");
+        drop(next);
+        drop(inherited);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn ping_uses_isolated_workspace_and_preserves_auth_and_chats() {
