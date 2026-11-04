@@ -4,3 +4,16 @@ dist/
 *.log
 backup-*/
 .superpowers/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+auth.json
+auth.json.*
+.codex/
+.codex-profiles/
+*.sqlite
+*.sqlite-*
+audit-report.json
+release-artifacts/

@@ -1,0 +1,82 @@
+name: CI
+on:
+  push:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  quality:
+    name: Formatting and frontend checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Rust checks
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+      - run: cargo fmt --all -- --check
+      - run: node scripts/check-ui.mjs
+      - name: Validate workflow syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+      - name: Check release helper syntax
+        run: python3 -m py_compile scripts/check-release.py
+  linux:
+    name: Linux (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-linux
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Test the core without real credentials
+        run: cargo test --locked -p codex-dock-core
+      - name: Lint the complete workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build the desktop and CLI
+        run: cargo build --locked --release --workspace
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codex-dock-${{ matrix.os }}-binaries
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            target/release/codex-dock
+            target/release/codex-dock-cli
+  gate:
+    name: CI gate
+    if: always()
+    needs: [quality, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          LINUX: ${{ needs.linux.result }}
+        run: test "$QUALITY" = success && test "$LINUX" = success

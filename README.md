@@ -1,5 +1,11 @@
 # Codex Dock
 
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md),
+[security reporting](SECURITY.md), and the [community conduct](CODE_OF_CONDUCT.md).
+CI tests and builds the Linux app without using real account credentials.
+Maintainer settings and draft releases are documented in
+[docs/maintaining.md](docs/maintaining.md).
+
 A desktop app for people running more than one Codex account on one machine. It
 lists accounts, launches each in its own Codex Desktop window, and reports
 per-account usage from a tray icon — all windows sharing one chat store.
