@@ -22,6 +22,13 @@ fn command(binary: &Path, profile: &Path, workspace: &Path) -> Command {
     cmd
 }
 
+// Explicitly unlock before closing: another thread may fork while a ping holds
+// the lock, briefly keeping the same open file description alive in its child.
+struct PingLock(std::fs::File);
+impl Drop for PingLock {
+    fn drop(&mut self) { let _ = self.0.unlock(); }
+}
+
 struct Workspace(std::path::PathBuf);
 impl Drop for Workspace {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
@@ -41,6 +48,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
     let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).mode(0o600)
         .open(account.path.join(".dock-ping.lock"))?;
     lock.try_lock().map_err(|_| Error::Msg("A ping is already running for this account.".into()))?;
+    let _lock = PingLock(lock);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let stamp = account.path.join(".dock-last-ping");
     if let Some(last) = std::fs::read_to_string(&stamp).ok().and_then(|s| s.parse::<u64>().ok()) {
