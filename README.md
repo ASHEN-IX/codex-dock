@@ -12,7 +12,15 @@ same threads appear in every window. Codex Dock manages that split for you.
 
 ## Install
 
-Requires Rust, `sqlite3` on `PATH`, and `webkit2gtk-4.1` + `gtk3` for the shell.
+To install a prebuilt package without cloning this repository or installing Rust,
+see [binary package installation](packaging/INSTALL.md). Contributors can build
+AppImage, Debian and RPM bundles with `make release`, a Linux archive with
+`make package-linux`, or an optional Arch package with `make package-arch`. These package targets do not change account or chat data.
+Prebuilt assets must be supplied by a release publisher; these commands alone
+do not publish them.
+
+Building from source requires Rust, `sqlite3` on `PATH`, and WebKitGTK 4.1 +
+GTK3 development libraries. See the installation guide for distribution details.
 
 ```bash
 make setup     # installs the Tauri CLI (network, once)
@@ -28,9 +36,37 @@ make autostart   # start it docked when you log in (optional)
 make uninstall   # removes the binary, launcher, and autostart entry
 ```
 
-`make release` builds distributable bundles (`deb` + `AppImage`) instead.
+`make release` builds AppImage, Debian and RPM bundles. The Linux packages
+workflow builds on Ubuntu 22.04 and tests the core on Ubuntu 22.04 and 24.04.
+Artifacts need distribution-specific runtime validation before declaring support.
 
 ### Running as an installed app
+
+- **Ping** sends one minimal message for a signed-in account to open an idle
+  usage window, then refreshes the server's usage and reset time. It uses
+  allowance. API-key profiles are excluded. An explicit click sends one message,
+  even if a usage reset time already exists. The actual model reply confirms
+  delivery. This is a background request; use **Open** to open a desktop window.
+  It never resets an active limit or invents a five-hour countdown. Missing or
+  delayed reset times remain unconfirmed until a fresh server reading arrives.
+  Requires Codex CLI 0.166 or later with `exec --ignore-user-config` support.
+  Pings run in a temporary directory, with ephemeral history, read-only sandbox,
+  ignored user config/rules and disabled shell, hooks, plugins and delegation.
+  Manual Ping has a one-minute cooldown per account, a 90-second timeout,
+  and no automatic retries. A failed/timed-out request may still use
+  allowance. Existing projects, config and saved chats are not used as context.
+
+- **Auto-ping** is a separate saved setting, off by default. Enabling it sends
+  one background ping to each eligible account that Dock has not pinged for the
+  current period. While Dock is running (including docked in the tray), it checks
+  every minute and sends again only after a successfully recorded server reset
+  time has passed. Successful manual pings count too, including after a restart.
+  Accounts with unavailable usage, no five-hour limit, or exhausted allowance
+  are skipped. Unknown reset times, failures and interrupted requests pause the
+  account; use manual Ping, or toggle the option off and on to retry failures.
+  Turning it off stops future automatic requests; an in-flight ping may finish.
+  Each row shows its last reply or error. This uses allowance, and does not open
+  desktop windows or reset an existing usage period.
 
 - **Closing the window docks it.** The tray keeps ticking and keeps the usage
   numbers live; the process keeps running. Quit from the tray menu.
@@ -76,6 +112,12 @@ data:
 These stay per profile, so each window keeps its own account:
 
 `auth.json`, `config.toml`, `.codex-global-state.json`
+
+New profiles import existing local projects and sidebar order automatically.
+Existing profiles import missing projects before their next fresh launch; close
+the account window first. Opening an already-running window only focuses it.
+An import backs up an existing state file before replacing it atomically, and
+does not copy another account's identity or migration flags.
 
 `.codex-global-state.json` is merged rather than shared: the project list is
 copied in with `setdefault` semantics while `local-document-identity` (which
