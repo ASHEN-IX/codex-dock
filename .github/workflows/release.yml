@@ -40,7 +40,7 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version '^2' --locked
       - name: Build portable Linux and Debian packages
-        run: cargo tauri build --locked --bundles appimage,deb
+        run: cargo tauri build --bundles appimage,deb -- --locked
       - name: Collect only release packages and checksums
         run: |
           mkdir release-artifacts
