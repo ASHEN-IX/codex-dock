@@ -5,8 +5,17 @@ fn command_targets_profile_home_and_own_user_data_dir() {
     let p = Paths::new("/home/u/.codex", "/home/u/.codex-profiles");
     let l = windows::command_for(&p, "work");
     assert_eq!(l.bin, "/usr/bin/chatgpt");
-    assert_eq!(l.env, vec![("CODEX_HOME".to_string(), "/home/u/.codex-profiles/work".to_string())]);
-    assert!(l.args.join(" ").contains("--user-data-dir=/home/u/.config/Codex-work"));
+    assert_eq!(
+        l.env,
+        vec![(
+            "CODEX_HOME".to_string(),
+            "/home/u/.codex-profiles/work".to_string()
+        )]
+    );
+    assert!(l
+        .args
+        .join(" ")
+        .contains("--user-data-dir=/home/u/.config/Codex-work"));
 }
 
 #[test]
@@ -23,7 +32,11 @@ fn running_maps_user_data_dir_back_to_account() {
     std::fs::remove_dir_all(&root).ok();
     let d = root.join("4242");
     std::fs::create_dir_all(&d).unwrap();
-    std::fs::write(d.join("cmdline"), "/usr/bin/chatgpt\0--user-data-dir=/home/u/.config/Codex-work\0").unwrap();
+    std::fs::write(
+        d.join("cmdline"),
+        "/usr/bin/chatgpt\0--user-data-dir=/home/u/.config/Codex-work\0",
+    )
+    .unwrap();
     let got = windows::running(&root);
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].account, "work");
@@ -55,8 +68,12 @@ fn ignores_electron_helpers_and_unrelated_apps_and_keeps_space_in_paths() {
         std::fs::write(dir.join("cmdline"), cmd).unwrap();
     }
     let got = windows::running(&root);
-    assert_eq!(got.len(), 1); assert_eq!(got[0].pid, 1);
-    assert_eq!(got[0].user_data_dir.to_str().unwrap(), "/home/a user/.config/Codex-work");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].pid, 1);
+    assert_eq!(
+        got[0].user_data_dir.to_str().unwrap(),
+        "/home/a user/.config/Codex-work"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -69,9 +86,12 @@ fn legacy_default_process_is_reused_for_the_same_named_account() {
     let auth = r#"{"tokens":{"account_id":"same"}}"#;
     std::fs::write(p.base.join("auth.json"), auth).unwrap();
     std::fs::write(p.profiles.join("work/auth.json"), auth).unwrap();
-    let proc = root.join("proc/42"); std::fs::create_dir_all(&proc).unwrap();
+    let proc = root.join("proc/42");
+    std::fs::create_dir_all(&proc).unwrap();
     std::fs::write(proc.join("cmdline"), "/usr/lib/chatgpt/ChatGPT\0").unwrap();
     let got = windows::running_for(&p, &root.join("proc"));
-    assert_eq!(got.len(), 1); assert_eq!(got[0].account, "work"); assert_eq!(got[0].pid, 42);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].account, "work");
+    assert_eq!(got[0].pid, 42);
     std::fs::remove_dir_all(root).unwrap();
 }

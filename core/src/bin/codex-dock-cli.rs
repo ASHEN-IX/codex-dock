@@ -1,7 +1,9 @@
 use codex_dock_core::{accounts, store, usage, windows, Paths, StoreState};
 
 fn stamp() -> String {
-    let out = std::process::Command::new("date").arg("+%Y%m%d-%H%M%S").output();
+    let out = std::process::Command::new("date")
+        .arg("+%Y%m%d-%H%M%S")
+        .output();
     out.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "backup".to_string())
@@ -18,7 +20,9 @@ fn state_label(s: &StoreState) -> String {
     match s {
         StoreState::Shared => "shared".into(),
         StoreState::NotConfigured => "not configured".into(),
-        StoreState::Split { threads_in_profile } => format!("split ({threads_in_profile} threads in a profile)"),
+        StoreState::Split { threads_in_profile } => {
+            format!("split ({threads_in_profile} threads in a profile)")
+        }
         StoreState::AuthCycle => "auth cycle".into(),
         StoreState::Nested { profile } => format!("nested ({profile})"),
     }
@@ -33,7 +37,16 @@ fn cmd_status(p: &Paths) -> i32 {
     println!("\naccounts:");
     for a in &accts {
         let id = a.account_id.as_deref().unwrap_or("—");
-        println!("  {:<12} {} ({})", a.name, if a.logged_in { "logged in" } else { "signed out" }, id);
+        println!(
+            "  {:<12} {} ({})",
+            a.name,
+            if a.logged_in {
+                "logged in"
+            } else {
+                "signed out"
+            },
+            id
+        );
     }
     if matches!(r.state, StoreState::Shared) {
         0
@@ -44,19 +57,29 @@ fn cmd_status(p: &Paths) -> i32 {
 
 fn cmd_usage(p: &Paths, with_usage: bool) -> i32 {
     let accts = accounts::list(p).unwrap_or_default();
-    println!("{:<12} {:<8} {:>7} {:>7} {:>9}", "account", "plan", "5-hour", "weekly", "credits");
+    println!(
+        "{:<12} {:<8} {:>7} {:>7} {:>9}",
+        "account", "plan", "5-hour", "weekly", "credits"
+    );
     for a in &accts {
-        let u = if with_usage { Some(usage::read(p, &a.name, now())) } else { None };
+        let u = if with_usage {
+            Some(usage::read(p, &a.name, now()))
+        } else {
+            None
+        };
         match u {
             Some(u) => {
-                let pct = |v: Option<f64>| v.map(|x| format!("{x:.1}%")).unwrap_or_else(|| "—".into());
+                let pct =
+                    |v: Option<f64>| v.map(|x| format!("{x:.1}%")).unwrap_or_else(|| "—".into());
                 println!(
                     "{:<12} {:<8} {:>7} {:>7} {:>9}",
                     a.name,
                     u.plan.as_deref().unwrap_or("—"),
                     pct(u.five_hour_percent),
                     pct(u.weekly_percent),
-                    u.credits.map(|c| format!("{c:.1}")).unwrap_or_else(|| "—".into())
+                    u.credits
+                        .map(|c| format!("{c:.1}"))
+                        .unwrap_or_else(|| "—".into())
                 );
                 if let Some(e) = u.error {
                     println!("  ! {e}");
@@ -202,7 +225,12 @@ fn main() {
         },
         Some("running") => {
             for w in windows::running_for(&p, std::path::Path::new("/proc")) {
-                println!("{}\t{}\tpid {}", w.account, w.user_data_dir.display(), w.pid);
+                println!(
+                    "{}\t{}\tpid {}",
+                    w.account,
+                    w.user_data_dir.display(),
+                    w.pid
+                );
             }
             0
         }

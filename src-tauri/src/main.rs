@@ -43,7 +43,13 @@ struct Login {
 
 impl Login {
     fn starting() -> Login {
-        Login { code: None, url: None, done: false, error: None, pid: None }
+        Login {
+            code: None,
+            url: None,
+            done: false,
+            error: None,
+            pid: None,
+        }
     }
 }
 
@@ -81,7 +87,10 @@ fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     }
     {
         let state = app.state::<LoginState>();
-        let mut map = state.0.lock().map_err(|_| "login state poisoned".to_string())?;
+        let mut map = state
+            .0
+            .lock()
+            .map_err(|_| "login state poisoned".to_string())?;
         // Adopt the in-flight sign-in instead of starting a second one: the
         // dialog can be reopened, and two `codex login` children would race for
         // the same auth.json.
@@ -104,7 +113,11 @@ fn run_login(app: tauri::AppHandle, name: String, home: std::path::PathBuf) {
     // account's credentials.
     let backup = Paths::real().backup_dir(&now().to_string());
     if let Err(e) = accounts::materialise_auth(&home, &backup) {
-        set_login_error(&app, &name, format!("could not protect the existing credentials: {e}"));
+        set_login_error(
+            &app,
+            &name,
+            format!("could not protect the existing credentials: {e}"),
+        );
         return;
     }
 
@@ -269,8 +282,7 @@ fn last_meaningful_line(s: &str) -> String {
     strip_ansi(s)
         .lines()
         .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty() && !l.starts_with('─'))
-        .last()
+        .rfind(|l| !l.is_empty() && !l.starts_with('─'))
         .unwrap_or_else(|| "sign-in did not complete".to_string())
 }
 
@@ -387,9 +399,13 @@ fn open_window(account: String) -> Result<u32, String> {
         .into_iter()
         .any(|a| a.name == account && a.logged_in);
     if !logged_in {
-        return Err(format!("'{account}' is not signed in yet — sign in from Codex Dock first"));
+        return Err(format!(
+            "'{account}' is not signed in yet — sign in from Codex Dock first"
+        ));
     }
-    windows::launch(&p, &account).map(|w| w.pid).map_err(|e| e.to_string())
+    windows::launch(&p, &account)
+        .map(|w| w.pid)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -454,13 +470,19 @@ fn main() {
                 let p = Paths::real();
                 let accounts = accounts::list(&p).unwrap_or_default();
                 let cache = &app_for_menu.state::<UsageCache>().0;
-                let usages: Vec<_> =
-                    accounts.iter().map(|a| cache.get_or_read(&p, &a.name, now)).collect();
-                let signed_in: Vec<String> =
-                    accounts.iter().filter(|a| a.logged_in).map(|a| a.name.clone()).collect();
+                let usages: Vec<_> = accounts
+                    .iter()
+                    .map(|a| cache.get_or_read(&p, &a.name, now))
+                    .collect();
+                let signed_in: Vec<String> = accounts
+                    .iter()
+                    .filter(|a| a.logged_in)
+                    .map(|a| a.name.clone())
+                    .collect();
                 let is_in = |name: &str| signed_in.iter().any(|n| n == name);
-                for (i, entry) in
-                    tray::menu_entries_with(&usages, now(), &is_in).into_iter().enumerate()
+                for (i, entry) in tray::menu_entries_with(&usages, now(), &is_in)
+                    .into_iter()
+                    .enumerate()
                 {
                     match entry.kind {
                         tray::RowKind::Separator => {

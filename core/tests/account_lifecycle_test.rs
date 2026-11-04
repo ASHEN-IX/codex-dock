@@ -59,7 +59,10 @@ fn linking_twice_does_not_disturb_the_links() {
     store::link_profile(&p, "fresh").unwrap();
     let first = db::inode(&p.profiles.join("fresh/state_5.sqlite")).unwrap();
     store::link_profile(&p, "fresh").unwrap();
-    assert_eq!(first, db::inode(&p.profiles.join("fresh/state_5.sqlite")).unwrap());
+    assert_eq!(
+        first,
+        db::inode(&p.profiles.join("fresh/state_5.sqlite")).unwrap()
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -96,7 +99,10 @@ fn removing_an_account_also_parks_its_window_data() {
 
     assert!(!udd.exists(), "window data must leave the config dir");
     assert!(bak.join("gone/auth.json").exists() || bak.join("gone").is_dir());
-    assert!(bak.join("Codex-gone-userdata/Cookies").exists(), "and be recoverable");
+    assert!(
+        bak.join("Codex-gone-userdata/Cookies").exists(),
+        "and be recoverable"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -123,7 +129,10 @@ fn the_shared_store_survives_a_removal() {
 
     // The other account still sees the chats.
     assert_eq!(store::inspect(&p).state, StoreState::Shared);
-    assert_eq!(db::thread_count(&p.profiles.join("b/state_5.sqlite")).unwrap(), 1);
+    assert_eq!(
+        db::thread_count(&p.profiles.join("b/state_5.sqlite")).unwrap(),
+        1
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -143,11 +152,8 @@ fn signing_in_cannot_write_through_into_another_account() {
         r#"{"tokens":{"account_id":"WORK-real"}}"#,
     )
     .unwrap();
-    std::os::unix::fs::symlink(
-        p.profiles.join("work/auth.json"),
-        p.base.join("auth.json"),
-    )
-    .unwrap();
+    std::os::unix::fs::symlink(p.profiles.join("work/auth.json"), p.base.join("auth.json"))
+        .unwrap();
 
     let bak = p.backup_dir("stamp");
     // The profile path itself is a link to the base, so materialise through the
@@ -177,7 +183,11 @@ fn signing_in_cannot_write_through_into_another_account() {
 fn materialising_a_real_auth_file_changes_nothing() {
     let (t, p) = setup("alreadyreal");
     accounts::create(&p, "work", None).unwrap();
-    std::fs::write(p.profiles.join("work/auth.json"), r#"{"tokens":{"account_id":"x"}}"#).unwrap();
+    std::fs::write(
+        p.profiles.join("work/auth.json"),
+        r#"{"tokens":{"account_id":"x"}}"#,
+    )
+    .unwrap();
     let bak = p.backup_dir("stamp");
     assert!(!accounts::materialise_auth(&p.profiles.join("work"), &bak).unwrap());
     assert!(p.profiles.join("work/auth.json").is_file());
@@ -193,7 +203,7 @@ fn materialising_without_credentials_is_not_an_error() {
     accounts::create(&p, "fresh", None).unwrap();
     let bak = p.backup_dir("stamp");
     assert!(!accounts::materialise_auth(&p.profiles.join("fresh"), &bak).unwrap());
-    assert!(accounts::restore_auth(&p.profiles.join("fresh"), &bak).unwrap() == false);
+    assert!(!accounts::restore_auth(&p.profiles.join("fresh"), &bak).unwrap());
     std::fs::remove_dir_all(&t).ok();
 }
 

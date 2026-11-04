@@ -53,9 +53,17 @@ pub fn inspect(p: &Paths) -> StoreReport {
     }
 
     // Nested: the profiles dir lives inside (or is) the base store.
-    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(&p.profiles), std::fs::canonicalize(&p.base)) {
+    if let (Ok(a), Ok(b)) = (
+        std::fs::canonicalize(&p.profiles),
+        std::fs::canonicalize(&p.base),
+    ) {
         if a.starts_with(&b) {
-            return report(StoreState::Nested { profile: first(&accounts) }, &base_db);
+            return report(
+                StoreState::Nested {
+                    profile: first(&accounts),
+                },
+                &base_db,
+            );
         }
     }
 
@@ -82,7 +90,12 @@ pub fn inspect(p: &Paths) -> StoreReport {
         }
         if let Ok(n) = db::thread_count(&prof_db) {
             if n > 0 {
-                return report(StoreState::Split { threads_in_profile: n }, &base_db);
+                return report(
+                    StoreState::Split {
+                        threads_in_profile: n,
+                    },
+                    &base_db,
+                );
             }
         }
     }
@@ -133,7 +146,13 @@ fn report(state: StoreState, base_db: &std::path::Path) -> StoreReport {
             (Err(e), _) | (_, Err(e)) => (0, Vec::new(), Some(e.to_string())),
         }
     };
-    StoreReport { state, threads, projects, inodes: Vec::new(), error }
+    StoreReport {
+        state,
+        threads,
+        projects,
+        inodes: Vec::new(),
+        error,
+    }
 }
 
 use crate::error::{Error, Result};
@@ -260,7 +279,9 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     let mut inodes = Vec::new();
     if base_db.exists() {
         if !db::quick_check(&base_db)? {
-            return Err(Error::Msg("shared database failed PRAGMA quick_check".into()));
+            return Err(Error::Msg(
+                "shared database failed PRAGMA quick_check".into(),
+            ));
         }
         let base_ino = db::inode(&base_db)?;
         inodes.push(("base".to_string(), base_ino));
@@ -314,11 +335,17 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
 
     // Sidebar presentation only; never the identity block.
     if let (Some(s_atom), Some(d_atom)) = (
-        src.get("electron-persisted-atom-state").and_then(|v| v.as_object()),
-        dst.get("electron-persisted-atom-state").and_then(|v| v.as_object()).cloned(),
+        src.get("electron-persisted-atom-state")
+            .and_then(|v| v.as_object()),
+        dst.get("electron-persisted-atom-state")
+            .and_then(|v| v.as_object())
+            .cloned(),
     ) {
         let mut atoms = d_atom;
-        for k in ["flat-project-sidebar-preferences-v1", "new-task-project-by-computer"] {
+        for k in [
+            "flat-project-sidebar-preferences-v1",
+            "new-task-project-by-computer",
+        ] {
             if let Some(v) = s_atom.get(k) {
                 atoms.entry(k.to_string()).or_insert_with(|| v.clone());
             }

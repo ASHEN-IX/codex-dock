@@ -46,7 +46,12 @@ pub fn profiles(p: &Paths) -> Result<Vec<Account>> {
             continue;
         }
         let (account_id, logged_in) = auth_info(&entry.path().join("auth.json"));
-        out.push(Account { name, path, account_id, logged_in });
+        out.push(Account {
+            name,
+            path,
+            account_id,
+            logged_in,
+        });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -56,12 +61,22 @@ pub fn profiles(p: &Paths) -> Result<Vec<Account>> {
 pub fn list(p: &Paths) -> Result<Vec<Account>> {
     let mut all = profiles(p)?;
     // A named profile with private credentials is preferable to a default alias.
-    all.sort_by_key(|a| (a.name == "default", a.path.join("auth.json").is_symlink(), a.name.clone()));
+    all.sort_by_key(|a| {
+        (
+            a.name == "default",
+            a.path.join("auth.json").is_symlink(),
+            a.name.clone(),
+        )
+    });
     let mut out: Vec<Account> = Vec::new();
     for a in all {
-        let duplicate = a.account_id.as_ref().is_some_and(|id|
-            out.iter().any(|b| b.account_id.as_ref() == Some(id)));
-        if !duplicate { out.push(a); }
+        let duplicate = a
+            .account_id
+            .as_ref()
+            .is_some_and(|id| out.iter().any(|b| b.account_id.as_ref() == Some(id)));
+        if !duplicate {
+            out.push(a);
+        }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -69,10 +84,15 @@ pub fn list(p: &Paths) -> Result<Vec<Account>> {
 
 pub fn canonical_name(p: &Paths, name: &str) -> Result<String> {
     let all = profiles(p)?;
-    let account = all.iter().find(|a| a.name == name)
+    let account = all
+        .iter()
+        .find(|a| a.name == name)
         .ok_or_else(|| Error::Msg(format!("unknown account '{name}'")))?;
     if let Some(id) = &account.account_id {
-        if let Some(canonical) = list(p)?.into_iter().find(|a| a.account_id.as_ref() == Some(id)) {
+        if let Some(canonical) = list(p)?
+            .into_iter()
+            .find(|a| a.account_id.as_ref() == Some(id))
+        {
             return Ok(canonical.name);
         }
     }
@@ -114,7 +134,12 @@ pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account
     }
 
     let (account_id, logged_in) = auth_info(&path.join("auth.json"));
-    Ok(Account { name: name.to_string(), path, account_id, logged_in })
+    Ok(Account {
+        name: name.to_string(),
+        path,
+        account_id,
+        logged_in,
+    })
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {

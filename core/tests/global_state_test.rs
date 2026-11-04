@@ -13,17 +13,31 @@ fn merge_keeps_the_windows_own_account_identity() {
     let t = tmp("identity");
     let base = t.join("base.json");
     let prof = t.join("prof.json");
-    std::fs::write(&base, r#"{"local-projects":{"p1":{"name":"wie-challenge"}},
-        "electron-persisted-atom-state":{"local-document-identity":{"accountId":"BASE"}}}"#).unwrap();
-    std::fs::write(&prof, r#"{"local-projects":{},
-        "electron-persisted-atom-state":{"local-document-identity":{"accountId":"MINE"}}}"#).unwrap();
+    std::fs::write(
+        &base,
+        r#"{"local-projects":{"p1":{"name":"wie-challenge"}},
+        "electron-persisted-atom-state":{"local-document-identity":{"accountId":"BASE"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &prof,
+        r#"{"local-projects":{},
+        "electron-persisted-atom-state":{"local-document-identity":{"accountId":"MINE"}}}"#,
+    )
+    .unwrap();
 
     store::merge_global_state(&base, &prof, &t.join("bak")).unwrap();
 
-    let out: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&prof).unwrap()).unwrap();
-    assert_eq!(out["electron-persisted-atom-state"]["local-document-identity"]["accountId"], "MINE",
-        "the window's own account must never be overwritten");
-    assert!(out["local-projects"]["p1"].is_object(), "projects must be merged in");
+    let out: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&prof).unwrap()).unwrap();
+    assert_eq!(
+        out["electron-persisted-atom-state"]["local-document-identity"]["accountId"], "MINE",
+        "the window's own account must never be overwritten"
+    );
+    assert!(
+        out["local-projects"]["p1"].is_object(),
+        "projects must be merged in"
+    );
     std::fs::remove_dir_all(&t).ok();
 }
 
@@ -32,13 +46,25 @@ fn merge_preserves_existing_project_entries() {
     let t = tmp("preserve");
     let base = t.join("base.json");
     let prof = t.join("prof.json");
-    std::fs::write(&base, r#"{"local-projects":{"shared":{"name":"from-base"}}}"#).unwrap();
-    std::fs::write(&prof, r#"{"local-projects":{"shared":{"name":"already-here"},"own":{"name":"mine"}}}"#).unwrap();
+    std::fs::write(
+        &base,
+        r#"{"local-projects":{"shared":{"name":"from-base"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &prof,
+        r#"{"local-projects":{"shared":{"name":"already-here"},"own":{"name":"mine"}}}"#,
+    )
+    .unwrap();
 
     store::merge_global_state(&base, &prof, &t.join("bak")).unwrap();
 
-    let out: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&prof).unwrap()).unwrap();
-    assert_eq!(out["local-projects"]["shared"]["name"], "already-here", "local entry wins");
+    let out: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&prof).unwrap()).unwrap();
+    assert_eq!(
+        out["local-projects"]["shared"]["name"], "already-here",
+        "local entry wins"
+    );
     assert_eq!(out["local-projects"]["own"]["name"], "mine");
     std::fs::remove_dir_all(&t).ok();
 }
@@ -67,8 +93,16 @@ fn repair_syncs_projects_but_keeps_each_windows_account() {
     store::repair(&p, &p.backup_dir("s")).unwrap();
 
     let out: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(p.profiles.join("work/.codex-global-state.json")).unwrap()).unwrap();
-    assert!(out["local-projects"]["shared"].is_object(), "projects synced");
-    assert_eq!(out["electron-persisted-atom-state"]["local-document-identity"]["accountId"], "MINE");
+        &std::fs::read_to_string(p.profiles.join("work/.codex-global-state.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        out["local-projects"]["shared"].is_object(),
+        "projects synced"
+    );
+    assert_eq!(
+        out["electron-persisted-atom-state"]["local-document-identity"]["accountId"],
+        "MINE"
+    );
     std::fs::remove_dir_all(&t).ok();
 }

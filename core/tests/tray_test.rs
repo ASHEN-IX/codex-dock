@@ -10,7 +10,10 @@ fn u(acct: &str, pct: Option<f64>, plan: Option<&str>) -> Usage {
 
 #[test]
 fn tray_title_names_running_accounts() {
-    let title = tray::title(&[u("work", Some(10.0), Some("pro")), u("secondary", Some(20.0), None)]);
+    let title = tray::title(&[
+        u("work", Some(10.0), Some("pro")),
+        u("secondary", Some(20.0), None),
+    ]);
     assert!(title.contains("2"), "should show the count: {title}");
 }
 
@@ -54,7 +57,11 @@ fn a_stale_row_says_when_it_was_last_checked() {
     u.stale = true;
     let rows = tray::menu_rows_at(&[u], 1000 + 300);
     assert!(rows[0].label.contains("55.0"), "keeps the real number");
-    assert!(rows[0].label.contains("last checked 5m ago"), "got {}", rows[0].label);
+    assert!(
+        rows[0].label.contains("last checked 5m ago"),
+        "got {}",
+        rows[0].label
+    );
 }
 
 #[test]
@@ -153,7 +160,7 @@ fn icon_for_uses_the_worst_percentage_and_colour() {
     let icon = tray::icon_for(&usages, 32);
     assert_eq!(icon.rgba.len(), 32 * 32 * 4);
     // 90% is red, so the filled arc is the red channel's 0xf8.
-    let idx = ((1 * 32 + 16) * 4) as usize;
+    let idx = ((32 + 16) * 4) as usize;
     assert_eq!(icon.rgba[idx], 0xf8, "worst account drives the colour");
 }
 
@@ -164,18 +171,27 @@ fn menu_groups_each_account_over_several_lines() {
     w.resets_at = Some(1000 + 3600);
     let entries = tray::menu_entries(&[w], 1000);
 
-    let labelled: Vec<_> = entries.iter().filter(|e| !e.label.trim().is_empty()).collect();
+    let labelled: Vec<_> = entries
+        .iter()
+        .filter(|e| !e.label.trim().is_empty())
+        .collect();
     assert!(
         labelled.len() >= 3,
         "header, name and numbers each get their own line: {labelled:?}"
     );
-    let lines: Vec<_> = entries.iter().filter(|e| e.kind == tray::RowKind::Account).collect();
+    let lines: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == tray::RowKind::Account)
+        .collect();
     assert_eq!(lines.len(), 1, "only the name line is an account action");
 
     let name_line = &lines[0].label;
     assert!(name_line.contains("work"), "got {name_line}");
     assert!(name_line.contains("plus"));
-    assert!(!name_line.contains("55.0"), "numbers are not crammed into the name line");
+    assert!(
+        !name_line.contains("55.0"),
+        "numbers are not crammed into the name line"
+    );
 
     let gauge_line = entries
         .iter()
@@ -188,7 +204,10 @@ fn menu_groups_each_account_over_several_lines() {
 
     // Exactly one row per account opens it; the numbers must not, or a
     // signed-out account could be opened through its gauge line.
-    let openable: Vec<_> = entries.iter().filter(|e| e.kind == tray::RowKind::Account).collect();
+    let openable: Vec<_> = entries
+        .iter()
+        .filter(|e| e.kind == tray::RowKind::Account)
+        .collect();
     assert_eq!(openable.len(), 1, "one clickable row per account");
     assert_eq!(openable[0].account, "work");
     assert!(openable[0].enabled);
@@ -208,10 +227,7 @@ fn menu_marks_stale_accounts_in_their_header() {
     w.stale = true;
     w.checked_at = 1000;
     let entries = tray::menu_entries(&[w], 1000 + 300);
-    let name_line = entries
-        .iter()
-        .find(|e| e.label.contains("work"))
-        .unwrap();
+    let name_line = entries.iter().find(|e| e.label.contains("work")).unwrap();
     assert!(name_line.label.contains("stale"), "got {}", name_line.label);
     let detail = entries
         .iter()
@@ -234,11 +250,20 @@ fn a_signed_out_account_is_listed_but_not_openable() {
         1000,
         &|name| name == "work",
     );
-    let fresh = entries.iter().find(|e| e.account == "fresh").expect("listed");
-    assert!(!fresh.enabled, "opening it would only show Codex's sign-in screen");
+    let fresh = entries
+        .iter()
+        .find(|e| e.account == "fresh")
+        .expect("listed");
+    assert!(
+        !fresh.enabled,
+        "opening it would only show Codex's sign-in screen"
+    );
     assert!(fresh.label.contains("sign in"), "got {}", fresh.label);
 
-    let work = entries.iter().find(|e| e.account == "work").expect("listed");
+    let work = entries
+        .iter()
+        .find(|e| e.account == "work")
+        .expect("listed");
     assert!(work.enabled);
     assert!(!work.label.contains("sign in"), "got {}", work.label);
 }
