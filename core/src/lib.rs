@@ -1,8 +1,10 @@
 pub mod accounts;
+pub mod automation;
 pub mod db;
 pub mod error;
 pub mod login;
 pub mod paths;
+pub mod ping;
 pub mod rpc;
 pub mod tool;
 pub mod tray;

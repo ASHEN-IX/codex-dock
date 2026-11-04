@@ -247,6 +247,10 @@
   <button class="ghost" id="refresh">Refresh</button>
 </header>
 <main>
+  <label style="display:block;margin-bottom:12px;color:var(--dim)">
+    <input type="checkbox" id="autoPing" disabled> Auto-ping accounts while Dock is running
+    <span style="display:block;font-size:11px;margin-top:3px">Uses allowance. Sends once, then waits for the server-reported reset. Off by default.</span>
+  </label>
   <div id="banner"></div>
   <div id="accounts"></div>
 </main>
@@ -342,6 +346,7 @@ function colorOf(pct) {
   return pct >= 85 ? 'red' : pct >= 60 ? 'amber' : 'green';
 }
 
+const pendingPings = new Set();
 async function render() {
   if (!invoke) {
     fatal('window.__TAURI__ is undefined — the page is running without the Tauri bridge.');
@@ -359,6 +364,9 @@ async function render() {
     banner('');
   }
 
+  const automation = await invoke('auto_ping_settings');
+  $('autoPing').checked = automation.enabled;
+  $('autoPing').disabled = false;
   const [accts, usages] = await Promise.all([
     invoke('account_list'),
     invoke('usage_all'),
@@ -396,6 +404,15 @@ async function render() {
     }
 
     const foot = [];
+    const pingStatus = automation.records[a.accountId];
+    if (pingStatus?.reply) {
+      const at = new Date(pingStatus.attempted_at * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      foot.push(`<span>Last ping ${esc(at)}: <b>${esc(pingStatus.reply)}</b>${pingStatus.next_at ? '' : ' · waiting for reset time'}</span>`);
+    } else if (pingStatus?.error) {
+      foot.push(`<span class="err">Auto-ping paused: ${esc(pingStatus.error)} Use Ping to retry.</span>`);
+    } else if (pingStatus) {
+      foot.push('<span>Ping pending or interrupted. Toggle auto-ping off and on to retry.</span>');
+    }
     if (u.lifetimeTokens) foot.push(`<span>lifetime <b>${fmt(u.lifetimeTokens)}</b> tokens</span>`);
     if (u.peakDailyTokens) foot.push(`<span>peak day <b>${fmt(u.peakDailyTokens)}</b></span>`);
     if (u.streakDays) foot.push(`<span><b>${u.streakDays}</b>-day streak</span>`);
@@ -412,7 +429,8 @@ async function render() {
       <div class="actions">
         ${needsLogin ? `<button data-login="${esc(a.name)}" class="primary">Sign in</button>` : ''}
         ${a.loggedIn && !needsLogin ? `<button data-account="${esc(a.name)}">Open</button>` : ''}
-        <button class="mini" data-delete="${esc(a.name)}" title="Remove account">Remove</button>
+        ${a.loggedIn && !needsLogin && a.accountId ? `<button data-ping="${esc(a.name)}" ${pendingPings.has(a.name) ? 'disabled' : ''} title="Send a background message and show its reply. Uses allowance; does not open a desktop window or restart an existing usage period.">${pendingPings.has(a.name) ? 'Pinging…' : 'Ping'}</button>` : ''}
+        <button class="mini" data-delete="${esc(a.name)}" ${pendingPings.has(a.name) ? 'disabled' : ''} title="Remove account">Remove</button>
       </div>
       <div class="bars">
         ${bar('5-hour', u.fiveHour)}
@@ -436,8 +454,33 @@ async function render() {
     b.addEventListener('click', () => beginLogin(b.dataset.login));
   });
 
+  $('accounts').querySelectorAll('button[data-ping]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const account = b.dataset.ping;
+      if (pendingPings.has(account)) return;
+      pendingPings.add(account);
+      b.disabled = true;
+      b.textContent = 'Pinging…';
+      b.closest('.acct').querySelector('button[data-delete]').disabled = true;
+      let message;
+      try {
+        const result = await invoke('ping_account', { account });
+        const u = result.usage;
+        const reset = !u.stale && !u.error && u.resetsAt * 1000 > Date.now()
+          ? `Server-reported usage reset: ${new Date(u.resetsAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}.`
+          : 'The server has not confirmed a reset time yet. Refresh usage shortly.';
+        message = `${account}: Background ping delivered. Reply: ${result.reply}. ${reset}${result.warning ? ' ' + result.warning : ''}`;
+      } catch (e) { message = `${account}: ${String(e)}`; }
+      finally { pendingPings.delete(account); }
+      await refresh();
+      banner(`<div class="banner"><span>${esc(message)}</span></div>`);
+    });
+  });
+
   $('accounts').querySelectorAll('button[data-delete]').forEach((b) => {
-    b.addEventListener('click', () => removeAccount(b.dataset.delete));
+    b.addEventListener('click', () => {
+      if (!pendingPings.has(b.dataset.delete)) removeAccount(b.dataset.delete);
+    });
   });
 }
 
@@ -644,6 +687,17 @@ $('repair').addEventListener('click', async () => {
 });
 
 $('refresh').addEventListener('click', refresh);
+$('autoPing').addEventListener('change', async (event) => {
+  const enabled = event.target.checked;
+  event.target.disabled = true;
+  let message;
+  try {
+    await invoke('set_auto_ping', { enabled });
+    message = enabled ? 'Auto-ping enabled. Unpinged accounts will receive one background message. Uses allowance.' : 'Auto-ping disabled. No further automatic requests will start.';
+  } catch (e) { message = String(e); }
+  await refresh();
+  banner(`<div class="banner"><span>${esc(message)}</span></div>`);
+});
 refresh();
 setInterval(refresh, 60000);
 </script>

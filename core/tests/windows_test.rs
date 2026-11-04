@@ -4,7 +4,7 @@ use codex_dock_core::{windows, Paths};
 fn command_targets_profile_home_and_own_user_data_dir() {
     let p = Paths::new("/home/u/.codex", "/home/u/.codex-profiles");
     let l = windows::command_for(&p, "work");
-    assert_eq!(l.bin, "/usr/bin/chatgpt");
+    assert_eq!(l.bin, codex_dock_core::tool::desktop().to_string_lossy());
     assert_eq!(l.env, vec![("CODEX_HOME".to_string(), "/home/u/.codex-profiles/work".to_string())]);
     assert!(l.args.join(" ").contains("--user-data-dir=/home/u/.config/Codex-work"));
 }
@@ -73,5 +73,24 @@ fn legacy_default_process_is_reused_for_the_same_named_account() {
     std::fs::write(proc.join("cmdline"), "/usr/lib/chatgpt/ChatGPT\0").unwrap();
     let got = windows::running_for(&p, &root.join("proc"));
     assert_eq!(got.len(), 1); assert_eq!(got[0].account, "work"); assert_eq!(got[0].pid, 42);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rewritten_electron_titles_still_detect_running_accounts_and_ignore_helpers() {
+    let root = std::env::temp_dir().join(format!("cd-flat-proc-{}", std::process::id()));
+    for (pid, title) in [
+        (42, "/usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --user-data-dir=/home/a user/.config/Codex-personal"),
+        (43, "/usr/lib/chatgpt/ChatGPT --type=renderer --user-data-dir=/home/a user/.config/Codex-personal"),
+    ] {
+        let dir = root.join(pid.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cmdline"), title).unwrap();
+    }
+    let got = windows::running(&root);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].pid, 42);
+    assert_eq!(got[0].account, "personal");
+    assert_eq!(got[0].user_data_dir.to_str().unwrap(), "/home/a user/.config/Codex-personal");
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -25,7 +25,8 @@
     "active": true,
     "targets": [
       "appimage",
-      "deb"
+      "deb",
+      "rpm"
     ],
     "category": "Utility",
     "shortDescription": "Multi-account usage dock for Codex",

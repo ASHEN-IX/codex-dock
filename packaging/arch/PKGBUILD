@@ -1,0 +1,20 @@
+# Package prebuilt binaries from `make package-linux`, without compiling at install time.
+pkgname=codex-dock
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Multi-account usage dock for Codex Desktop'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ASHEN-IX/codex-dock'
+depends=('gtk3' 'webkit2gtk-4.1' 'sqlite' 'libayatana-appindicator')
+options=('!strip' '!debug')
+source=("codex-dock-linux-$(uname -m).tar.gz")
+# The packaging helper replaces this with the actual archive checksum.
+sha256sums=('SKIP')
+
+package() {
+  install -d "$pkgdir/usr/bin" "$pkgdir/usr/share"
+  install -m755 "$srcdir/codex-dock/bin/codex-dock" "$pkgdir/usr/bin/codex-dock"
+  install -m755 "$srcdir/codex-dock/bin/codex-dock-cli" "$pkgdir/usr/bin/codex-dock-cli"
+  cp -r "$srcdir/codex-dock/share/applications" "$pkgdir/usr/share/"
+  cp -r "$srcdir/codex-dock/share/icons" "$pkgdir/usr/share/"
+}

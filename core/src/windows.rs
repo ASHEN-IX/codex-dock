@@ -21,7 +21,7 @@ const FLAG: &str = "--user-data-dir=";
 
 pub fn command_for(p: &Paths, name: &str) -> Launcher {
     Launcher {
-        bin: "/usr/bin/chatgpt".to_string(),
+        bin: crate::tool::desktop().to_string_lossy().into_owned(),
         args: vec![format!("{FLAG}{}", user_data_dir(p, name).display())],
         env: vec![("CODEX_HOME".to_string(), p.profiles.join(name).display().to_string())],
     }
@@ -41,6 +41,7 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
         focus_pid(existing.pid);
         return Ok(existing);
     }
+    crate::store::sync_projects(p, name)?;
     let l = command_for(p, name);
     let mut cmd = std::process::Command::new(&l.bin);
     cmd.args(&l.args);
@@ -49,7 +50,7 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     }
     let child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            Error::Msg(format!("Codex Desktop not found at {}", l.bin))
+            Error::Msg(format!("Codex Desktop not found at {}. Put it on PATH or set CODEX_DESKTOP_BIN to its executable path.", l.bin))
         } else {
             Error::Io(e)
         }
@@ -82,11 +83,23 @@ pub fn running(proc_root: &Path) -> Vec<WindowProc> {
             Ok(r) => r,
             Err(_) => continue,
         };
-        let args: Vec<_> = raw.split(|b| *b == 0).filter(|b| !b.is_empty())
+        let mut args: Vec<_> = raw.split(|b| *b == 0).filter(|b| !b.is_empty())
             .map(|b| String::from_utf8_lossy(b).into_owned()).collect();
+        // Electron can rewrite /proc/cmdline into one process-title string.
+        // Split flag boundaries, not whitespace: profile paths may contain spaces.
+        if args.len() == 1 {
+            if let Some((exe, flags)) = args[0].split_once(" --") {
+                let mut expanded = vec![exe.to_owned()];
+                expanded.extend(flags.split(" --").map(|flag| format!("--{flag}")));
+                args = expanded;
+            }
+        }
         let Some(exe) = args.first() else { continue };
         let bin = Path::new(exe).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if !matches!(bin, "chatgpt" | "ChatGPT") || args.iter().any(|s| s.starts_with("--type=")) { continue; }
+        let desktop = crate::tool::desktop();
+        let configured = desktop.file_name().and_then(|s| s.to_str());
+        if !(matches!(bin, "chatgpt" | "ChatGPT" | "codex-desktop") || configured == Some(bin))
+            || args.iter().any(|s| s.starts_with("--type=")) { continue; }
         let dir = args.iter().find_map(|s| s.strip_prefix(FLAG).map(str::to_owned))
             .or_else(|| args.windows(2).find(|a| a[0] == "--user-data-dir").map(|a| a[1].clone()));
         let user_data_dir = dir.map(PathBuf::from).unwrap_or_default();
