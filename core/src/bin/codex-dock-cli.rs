@@ -35,7 +35,7 @@ fn cmd_status(p: &Paths) -> i32 {
     println!("projects: {}", r.projects.join(", "));
     let accts = accounts::list(p).unwrap_or_default();
     let signed_in = accts.iter().filter(|a| a.logged_in).count();
-    println!("{}", account_summary_line(accts.len(), signed_in));
+    println!("{}", status_counts_line(accts.len(), signed_in));
     if matches!(r.state, StoreState::Shared) {
         0
     } else {
@@ -44,7 +44,7 @@ fn cmd_status(p: &Paths) -> i32 {
 }
 
 /// The diagnostic renderer accepts only counts, never credential-bearing models.
-fn account_summary_line(configured: usize, signed_in: usize) -> String {
+fn status_counts_line(configured: usize, signed_in: usize) -> String {
     format!("accounts: {configured} configured, {signed_in} signed in")
 }
 
@@ -289,7 +289,7 @@ mod tests {
             logged_in: true,
         };
         let accounts = [account];
-        let line = account_summary_line(
+        let line = status_counts_line(
             accounts.len(),
             accounts.iter().filter(|a| a.logged_in).count(),
         );
