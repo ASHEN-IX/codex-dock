@@ -1,3 +1,4 @@
+use crate::platform;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -8,8 +9,7 @@ pub struct Paths {
 
 impl Paths {
     pub fn real() -> Paths {
-        let home = std::env::var("HOME").expect("HOME not set");
-        let h = PathBuf::from(home);
+        let h = platform::fs::home_dir();
         Paths {
             base: h.join(".codex"),
             profiles: h.join(".codex-profiles"),
@@ -34,6 +34,6 @@ impl Paths {
     /// Codex Desktop's per-window Electron profile. Each account gets its own
     /// so two windows cannot share cookies or window state.
     pub fn user_data_dir(&self, name: &str) -> PathBuf {
-        self.home().join(".config").join(format!("Codex-{name}"))
+        platform::fs::config_dir_at(self.home()).join(format!("Codex-{name}"))
     }
 }

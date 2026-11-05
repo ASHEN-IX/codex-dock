@@ -83,7 +83,6 @@ pub fn send(p: &Paths, name: &str) -> Result<String> {
 }
 
 fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<String> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     // Resolve from the actual account list, never from an unchecked path input.
     let account = accounts::list(p)?
         .into_iter()
@@ -91,12 +90,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
         .ok_or_else(|| {
             Error::Msg("Ping requires a signed-in ChatGPT account, not an API-key profile.".into())
         })?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(account.path.join(".dock-ping.lock"))?;
+    let lock = crate::platform::fs::open_private(&account.path.join(".dock-ping.lock"))?;
     lock.try_lock()
         .map_err(|_| Error::Msg("A ping is already running for this account.".into()))?;
     let _lock = PingLock(lock);
@@ -119,9 +113,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
         std::process::id(),
         now.as_nanos()
     )));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&workspace.0)?;
+    crate::platform::fs::create_private_dir(&workspace.0)?;
     // Keep failed attempts in the cooldown too: errors must not cause repeat spending.
     std::fs::write(&stamp, now.as_secs().to_string())?;
     let output = workspace.0.join("reply.txt");
@@ -158,7 +150,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

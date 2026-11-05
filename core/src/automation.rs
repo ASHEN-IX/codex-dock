@@ -29,17 +29,12 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        use std::io::Write;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let temporary = path.with_extension("json.tmp");
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)?;
+        let mut file = crate::platform::fs::create_private(&temporary)?;
         let json = serde_json::to_vec_pretty(self).map_err(|e| Error::Msg(e.to_string()))?;
         file.write_all(&json)?;
         file.sync_all()?;

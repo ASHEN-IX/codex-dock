@@ -200,9 +200,12 @@ rather than your real `~/.codex`.
 make test     # cargo test -p codex-dock-core
 ```
 
-78 tests. The ones worth knowing about reproduce real traps: auth cycles,
+132 tests. The ones worth knowing about reproduce real traps: auth cycles,
 nested profiles, split stores, repair idempotency, `rollout_path` repointing,
-absent usage fields staying `None`, and stale readings never becoming zero.
+absent usage fields staying `None`, stale readings never becoming zero, path
+traversal and Unicode/space names, and per-platform capability reporting
+("`platform_test` and `platform_capability_test` refuse silently-unsupported
+features; cross-OS guarantees are pinned in CI on all three runners").
 
 ## Build note
 
