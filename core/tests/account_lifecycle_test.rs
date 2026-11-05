@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use codex_dock_core::{accounts, db, store, Paths, StoreState};
 use std::path::PathBuf;
 

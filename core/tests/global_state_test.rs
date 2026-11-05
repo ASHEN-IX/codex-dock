@@ -78,6 +78,7 @@ fn merge_is_a_noop_when_the_state_files_are_missing() {
 }
 
 #[test]
+#[cfg(unix)]
 fn repair_syncs_projects_but_keeps_each_windows_account() {
     use codex_dock_core::{db, Paths};
     let t = tmp("repair");
@@ -108,6 +109,7 @@ fn repair_syncs_projects_but_keeps_each_windows_account() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_new_profile_imports_projects_without_base_identity_or_migration_flags() {
     use codex_dock_core::{accounts, Paths};
     let t = tmp("fresh-projects");

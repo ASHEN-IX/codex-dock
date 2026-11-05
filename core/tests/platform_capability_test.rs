@@ -58,3 +58,12 @@ fn platform_expectations_are_pinned_explicitly() {
         assert!(matches!(caps.window_activation, Support::No(_)));
     }
 }
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_refuses_linking_and_repair_before_mutation() {
+    let t = std::env::temp_dir().join(format!("cd-win-refuse-{}", std::process::id()));
+    let p = codex_dock_core::Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    assert!(codex_dock_core::store::link_profile(&p, "work").is_err());
+    assert!(codex_dock_core::store::repair(&p, &t.join("bak")).is_err());
+}

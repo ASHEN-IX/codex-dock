@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use codex_dock_core::{db, store, Paths};
 
 #[test]
