@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
-use codex_dock_core::{accounts, db, store, Paths, StoreState};
+#[cfg(target_os = "linux")]
+use codex_dock_core::StoreState;
+use codex_dock_core::{accounts, db, store, Paths};
 use std::path::PathBuf;
 
 fn tmp(tag: &str) -> PathBuf {
