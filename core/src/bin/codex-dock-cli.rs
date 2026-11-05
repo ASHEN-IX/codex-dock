@@ -16,7 +16,7 @@ fn stamp() -> String {
     }
     #[cfg(not(unix))]
     {
-        crate::platform::fs::utc_stamp().unwrap_or_else(|| "backup".to_string())
+        codex_dock_core::platform::fs::utc_stamp().unwrap_or_else(|| "backup".to_string())
     }
 }
 
