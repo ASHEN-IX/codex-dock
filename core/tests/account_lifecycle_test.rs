@@ -139,6 +139,7 @@ fn the_shared_store_survives_a_removal() {
 /// The parser the shell uses to show the device code. Kept honest against the
 /// real `codex login --device-auth` banner, ANSI escapes and all.
 #[test]
+#[cfg(unix)]
 fn signing_in_cannot_write_through_into_another_account() {
     // The live layout: base/auth.json -> profiles/work/auth.json, with
     // profiles/default a link to the base. So default/auth.json and work/auth.json

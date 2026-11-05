@@ -98,7 +98,7 @@ pub fn create_link(target: &Path, link: &Path) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = (target, link);
-        Err(Error::Msg(
+        Err(crate::error::Error::Msg(
             "symlink creation is not supported on this platform".into(),
         ))
     }
