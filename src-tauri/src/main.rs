@@ -147,15 +147,17 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Create an account, point it at the shared store, and start device sign-in.
+/// Create an account with safe preflight and transaction rollback.
+/// On supported platforms (Linux), links the shared store.
+/// On unverified platforms (Windows, macOS), uses isolation-only behavior.
 #[tauri::command]
 fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::Value, String> {
     let p = Paths::real();
-    let account = accounts::create(&p, &name, clone_from.as_deref()).map_err(|e| e.to_string())?;
-    store::link_profile(&p, &name).map_err(|e| e.to_string())?;
+    let res = accounts::add_account(&p, &name, clone_from.as_deref()).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
-        "name": account.name,
-        "loggedIn": account.logged_in,
+        "name": res.account.name,
+        "loggedIn": res.account.logged_in,
+        "sharedStore": res.shared_store,
     }))
 }
 

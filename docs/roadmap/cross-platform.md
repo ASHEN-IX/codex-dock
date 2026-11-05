@@ -49,18 +49,22 @@ Every platform-sensitive operation in the tree, and where it lives now:
 `core/src/platform` is the single seam layer:
 
 - `Support::Yes | No(reason)` — every missing feature carries its reason.
-- `capabilities()` — per-OS matrix, produced not assumed:
+- `capabilities()` — per-OS matrix, produced not assumed, distinguishing filesystem primitives from validated application compatibility:
 
   | Capability | Linux | macOS | Windows |
   |---|---|---|---|
-  | `shared_store_links` | Yes | Yes (symlinks exist, but **untested** — see §5) | No (needs Developer Mode / elevation; Phase 1 refuses) |
-  | `process_table` | Yes (procfs) | No ("reads /proc ... Linux-only") | No (not implemented) |
-  | `window_activation` | Yes (KWin/wmctrl) | No | No |
+  | `filesystem_symlinks` | Yes | Yes (POSIX symlinks available) | No (needs Developer Mode / elevation) |
+  | `shared_store_compatibility` | Yes (validated on Linux) | No (unvalidated runtime; profiles stay isolated) | No (unvalidated runtime; profiles stay isolated) |
+  | `native_process_discovery` | Yes (procfs `/proc`) | No (macOS native process scanning not implemented yet) | No (Win32 process discovery not implemented yet) |
+  | `window_activation` | Yes (KWin/wmctrl) | No (not implemented yet) | No (not implemented yet) |
+  | `safe_desktop_launch` | Yes (verified desktop exec) | No (macOS app bundle launch not implemented yet) | No (Windows process launch & escaping not implemented yet) |
 
 - `require(support, feature)` turns `No` into a user-readable refusal. Refusing
-  call sites: `store::link_profile`, `store::repair` (both refuse **before
-  moving anything**), `windows::launch` (cannot detect existing windows → would
-  duplicate them), CLI `running` (prints the reason, exits 1).
+  call sites:
+  - `store::link_profile`: requires `shared_store_compatibility` and `filesystem_symlinks`.
+  - `store::repair`: requires `shared_store_compatibility`, `filesystem_symlinks`, and `native_process_discovery` (refuses fail-closed if writers cannot be reliably excluded).
+  - `windows::launch`: requires `safe_desktop_launch` and `native_process_discovery`.
+  - `accounts::add_account`: preflights inputs, executes transactional rollback on failure without touching pre-existing directories, and uses **isolation-only mode** on macOS and Windows without attempting unverified shared-store operations.
 - `present?`/`absent` confusion is forbidden: an empty `read_dir` used to be
   indistinguishable from "no procfs"; procfs is now `Option`-gated.
 
@@ -147,18 +151,19 @@ restates the Phase 1 audit so T1 has a checklist to verify per OS.
 
 - **Linux (today, unchanged):** link-based shared store, verified by inode and
   `PRAGMA quick_check`; move-then-link with backups; refuse nested/cyclic
-  layouts. No concurrent unvalidated writes were introduced; merging still
-  has the standing rule *"never run against a running desktop window"* (docs +
-  code comment).
-- **Windows (Phase 1: isolation-only):** each `CODEX_HOME` is a complete,
-  independent store. `link_profile`/`repair` refuse with capability reasons
-  before any mutation. No shared mutable SQLite file is touched. When (and
-  only when) a Windows runtime test proves store layout + privilege
-  unblocked symlink creation, links can be enabled behind the same gate.
-- **macOS (Phase 1: isolation-only):** symlinks exist and *would* work, but
-  without a process table `launch` cannot dedupe windows, so the shared-store
-  path stays deliberately off until T2 (§6) proves the desktop keeps per-home
-  stores.
+  layouts. Account creation uses transactional rollback on linking failure.
+  Mutating repair enforces fail-closed protection against active Codex windows
+  and database writer locks.
+- **Windows (Phase 1 / 1.1: isolation-only):** each `CODEX_HOME` is a complete,
+  independent store. Account creation operates in isolation-only mode without
+  running unverified shared-store operations. Direct `link_profile` and `repair`
+  refuse with capability reasons before any mutation. No shared mutable SQLite
+  file is touched.
+- **macOS (Phase 1 / 1.1: isolation-only):** filesystem symlinks exist, but
+  creating symlinks is **never interpreted as evidence that multi-profile SQLite
+  sharing is safe**. Account creation operates strictly in isolation-only mode.
+  Direct shared-store linking and repair refuse fail-closed until runtime
+  compatibility is proven.
 - Used-space writes (`logs_2`, `queue_1`, `goals_1`) are per-profile by
   observed live layout; making them shared is **not** proposed: they are
   high-frequency write targets and concurrent multi-process writes to one
@@ -170,15 +175,21 @@ restates the Phase 1 audit so T1 has a checklist to verify per OS.
 
 ## 6. Staged plan, acceptance criteria
 
-### T0 — Phase 1 (this repo state)
-Adapters + capability gates + Linux-parity tests + three-OS CI gates.
-Acceptance: all core tests pass on Linux; native gates (fmt/test/clippy/check)
-pass on ubuntu/macos/windows runners; no user data touched anywhere.
+### T0 — Phase 1 & Phase 1.1 (this repo state)
+Adapters + capability gates + Linux-parity tests + three-OS CI gates + platform safety corrections:
+- Account creation atomicity: transactional preflight, rollback on failure, preservation of pre-existing directories.
+- Refactored capability model separating filesystem symlinks from validated shared-store compatibility, process discovery, window activation, and safe desktop launch.
+- Fail-closed repair protection: refuses when active Codex windows or database file locks are detected, or when reliable writer detection is unavailable.
+- Isolation-only runtime behavior for macOS and Windows.
+- Acceptance: all core tests pass on Linux; native gates (fmt/test/clippy/check) pass on ubuntu/macos/windows runners; no user data touched anywhere.
 
-### T1 — Verify desktop storeparity on Windows/macOS (manual, capability-gated)
-On disposable accounts: confirm which `CODEX_HOME` files the desktop writes on
-each OS, whether `--user-data-dir` is honored, and whether chats (rollouts →
-projections) behave like Linux. Evidence into this document.
+### T1 — Verify desktop store parity & storage compatibility on Windows/macOS (manual, capability-gated)
+Prerequisites:
+1. Address the external `sqlite3` CLI dependency (package/bundle SQLite or evaluate embedded engine), as Windows does not ship `sqlite3.exe` on PATH.
+2. Characterize Codex Desktop packaging on macOS (`.app` bundle structure, Electron sandbox boundaries, symlink traversal constraints).
+3. Characterize Codex Desktop packaging on Windows (`%LOCALAPPDATA%\Programs\Codex`, directory junctions vs symlinks, NTFS mandatory locking).
+4. Analyze concurrent SQLite WAL multi-window checkpointing hazards: evaluate `SQLITE_BUSY` when multiple windows read/write shared WAL pages.
+5. On disposable accounts: confirm which `CODEX_HOME` files the desktop writes on each OS, whether `--user-data-dir` is honored, and whether chats (rollouts → projections) behave like Linux. Evidence into this document.
 Acceptance: a table like §4 per OS, or an explicit "unsupported" entry.
 
 ### T2 — Native process enumeration where it is worth it

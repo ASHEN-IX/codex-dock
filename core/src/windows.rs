@@ -40,17 +40,17 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
         return Err(Error::Msg(format!("invalid account name '{canonical}'")));
     }
     let name = canonical.as_str();
-    // Without a process table we can neither find an existing window (opening
-    // would duplicate every click) nor wait for the first to appear. Refuse.
-    let reason = match crate::platform::capabilities().process_table {
-        crate::platform::Support::Yes => None,
-        crate::platform::Support::No(r) => Some(r),
-    };
-    if let Some(reason) = reason {
-        return Err(Error::Msg(format!(
-            "opening windows is not supported here: {reason}"
-        )));
-    }
+    // Safe desktop launching and native process discovery are both required.
+    // Without a process table we can neither find an existing window nor wait for it.
+    // Without safe desktop launching we cannot guarantee clean execution.
+    crate::platform::require(
+        crate::platform::capabilities().safe_desktop_launch,
+        "desktop launch",
+    )?;
+    crate::platform::require(
+        crate::platform::capabilities().native_process_discovery,
+        "desktop launch",
+    )?;
     let proc_root = crate::platform::process::proc_root().expect("probe capability just checked");
     let _lock = std::fs::OpenOptions::new()
         .create(true)

@@ -1,5 +1,6 @@
 use crate::db;
 use crate::paths::Paths;
+use std::path::{Path, PathBuf};
 
 pub const SHARED: [&str; 5] = [
     "state_5.sqlite",
@@ -115,6 +116,7 @@ pub fn inspect(p: &Paths) -> StoreReport {
 /// to preserve. Missing shared paths are skipped rather than created, which
 /// keeps this a no-op on a machine that has not been set up yet.
 pub fn link_profile(p: &Paths, name: &str) -> Result<()> {
+    crate::platform::fs::require_shared_store("shared-store linking")?;
     crate::platform::fs::require_links("shared-store linking")?;
     let dir = p.profiles.join(name);
     if !dir.is_dir() {
@@ -175,7 +177,6 @@ fn report(state: StoreState, base_db: &std::path::Path) -> StoreReport {
 }
 
 use crate::error::{Error, Result};
-use std::path::Path;
 
 fn move_aside(path: &Path, backup: &Path, label: &str) -> Result<()> {
     if !path.exists() && !path.is_symlink() {
@@ -189,12 +190,122 @@ fn move_aside(path: &Path, backup: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn ensure_unlocked(path: &Path, label: &str) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .or_else(|_| std::fs::OpenOptions::new().read(true).open(path))
+        .map_err(|e| Error::Msg(format!("cannot open {label} to verify locks: {e}")))?;
+
+    file.try_lock().map_err(|_| {
+        Error::Msg(format!(
+            "cannot repair: {label} is locked by an active process or writer"
+        ))
+    })?;
+    let _ = file.unlock();
+    Ok(())
+}
+
 pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
-    // Repair cannot leave a store it moved into an unusable half-linked state
-    // where links are impossible, and it must not merge profile data on the
-    // promise of links it cannot create. Refuse before touching anything.
+    repair_with_proc_root(p, backup, crate::platform::process::proc_root().as_deref())
+}
+
+pub fn repair_with_proc_root(
+    p: &Paths,
+    backup: &Path,
+    proc_root: Option<&Path>,
+) -> Result<StoreReport> {
+    // 1. Refuse before touching anything if shared store is not validated
+    crate::platform::fs::require_shared_store("shared-store repair")?;
     crate::platform::fs::require_links("shared-store repair")?;
-    std::fs::create_dir_all(backup)?;
+
+    // 2. Refuse if reliable process & writer discovery is unavailable
+    if let crate::platform::Support::No(reason) =
+        crate::platform::capabilities().native_process_discovery
+    {
+        return Err(Error::Msg(format!(
+            "cannot safely repair: reliable process and writer detection is unavailable on this platform ({reason}); active writers cannot be excluded"
+        )));
+    }
+
+    // 3. Fail-closed if active Codex windows or processes are running for this store
+    if let Some(root) = proc_root {
+        let running = crate::windows::running(root);
+        let config_root = crate::platform::fs::config_dir_at(p.home());
+        let active_for_store: Vec<String> = running
+            .into_iter()
+            .filter(|w| {
+                if !w.user_data_dir.as_os_str().is_empty()
+                    && w.user_data_dir.starts_with(&config_root)
+                {
+                    return true;
+                }
+                let env =
+                    std::fs::read(root.join(w.pid.to_string()).join("environ")).unwrap_or_default();
+                env.split(|b| *b == 0)
+                    .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
+                    .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
+                    .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
+                    .unwrap_or(false)
+            })
+            .map(|w| format!("pid {} ({})", w.pid, w.account))
+            .collect();
+        if !active_for_store.is_empty() {
+            return Err(Error::Msg(format!(
+                "cannot repair shared store while Codex windows are running (found: {}); close all Codex windows first",
+                active_for_store.join(", ")
+            )));
+        }
+    }
+
+    // 4. Fail-closed if active database writers or launch locks are detected
+    let base_db = p.base.join("state_5.sqlite");
+    if base_db.is_file() {
+        ensure_unlocked(&base_db, "base database (state_5.sqlite)")?;
+        let base_wal = p.base.join("state_5.sqlite-wal");
+        if base_wal.is_file() {
+            ensure_unlocked(&base_wal, "base WAL file (state_5.sqlite-wal)")?;
+        }
+    }
+
+    let writer_locks_dir = p.base.join("thread-writer-locks");
+    if writer_locks_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&writer_locks_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    ensure_unlocked(&path, &format!("thread writer lock '{}'", path.display()))?;
+                }
+            }
+        }
+    }
+
+    let mut profile_dirs = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&p.profiles) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') && e.path().is_dir() {
+                let launch_lock = e.path().join(".desktop-launch.lock");
+                if launch_lock.is_file() {
+                    ensure_unlocked(&launch_lock, &format!("launch lock for profile '{name}'"))?;
+                }
+                let prof_db = e.path().join("state_5.sqlite");
+                if prof_db.is_file() && !prof_db.is_symlink() {
+                    ensure_unlocked(&prof_db, &format!("database for profile '{name}'"))?;
+                    let prof_wal = e.path().join("state_5.sqlite-wal");
+                    if prof_wal.is_file() {
+                        ensure_unlocked(&prof_wal, &format!("WAL file for profile '{name}'"))?;
+                    }
+                }
+                profile_dirs.push((name, e.path()));
+            }
+        }
+    }
+    profile_dirs.sort();
 
     let current = inspect(p);
 
@@ -204,6 +315,9 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
             "profiles directory is inside the base store; move it out before repairing".into(),
         ));
     }
+
+    // Create backup directory only after all fail-closed preflight checks pass
+    std::fs::create_dir_all(backup)?;
 
     // 1. Break a cyclic auth.json: materialise a real file, keep the old link.
     // A genuine cycle is exactly the case where the link cannot be resolved.
@@ -218,18 +332,6 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
         // No credential can be recovered from a loop; leave the base logged
         // out rather than inventing one. The profile's own auth.json is intact.
     }
-
-    // 2. Per-profile: merge a split store, then link every shared path.
-    let mut profile_dirs = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&p.profiles) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && e.path().is_dir() {
-                profile_dirs.push((name, e.path()));
-            }
-        }
-    }
-    profile_dirs.sort();
 
     let base_db = p.base.join("state_5.sqlite");
     let base_real = std::fs::canonicalize(&p.base).ok();

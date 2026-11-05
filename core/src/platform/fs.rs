@@ -112,16 +112,24 @@ pub fn create_link(target: &Path, link: &Path) -> Result<()> {
     }
 }
 
-/// Capability check for symlink-style store sharing. Callers create links only
-/// after this reports `Yes`, so a refusing platform can neither create partial
-/// link sets nor pretend the store is shared.
+/// Capability check for OS-level symbolic links.
 pub fn links_support() -> crate::platform::Support {
-    crate::platform::capabilities().shared_store_links
+    crate::platform::capabilities().filesystem_symlinks
 }
 
-/// Refuse politely when the shared store cannot be linked on this platform.
+/// Capability check for validated multi-profile shared store operations.
+pub fn shared_store_support() -> crate::platform::Support {
+    crate::platform::capabilities().shared_store_compatibility
+}
+
+/// Refuse politely when symlink creation is not supported on this platform.
 pub fn require_links(feature: &str) -> Result<()> {
     crate::platform::require(links_support(), feature)
+}
+
+/// Refuse politely when shared store operations are not validated on this platform.
+pub fn require_shared_store(feature: &str) -> Result<()> {
+    crate::platform::require(shared_store_support(), feature)
 }
 
 /// A stable per-file identity for proving two paths are the same file.

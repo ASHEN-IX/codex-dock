@@ -120,6 +120,12 @@ pub fn safe_segment(name: &str) -> bool {
             .any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountCreation {
+    pub account: Account,
+    pub shared_store: bool,
+}
+
 pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
     if !valid_name(name) {
         return Err(Error::Msg(format!(
@@ -130,6 +136,12 @@ pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account
     if path.exists() {
         return Err(Error::Msg(format!("account '{name}' already exists")));
     }
+    if let Some(src) = clone_from {
+        let src_path = p.profiles.join(src);
+        if !src_path.is_dir() {
+            return Err(Error::Msg(format!("clone source '{src}' does not exist")));
+        }
+    }
     std::fs::create_dir_all(&path)?;
 
     if let Some(src) = clone_from {
@@ -139,10 +151,15 @@ pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account
                 continue;
             }
             let to = path.join(item);
-            if from.is_dir() {
-                copy_dir(&from, &to)?;
+            let copy_res = if from.is_dir() {
+                copy_dir(&from, &to)
             } else {
-                std::fs::copy(&from, &to)?;
+                std::fs::copy(&from, &to).map(|_| ()).map_err(Error::Io)
+            };
+            if let Err(e) = copy_res {
+                // Roll back newly created profile directory on clone failure
+                let _ = std::fs::remove_dir_all(&path);
+                return Err(e);
             }
         }
     }
@@ -153,6 +170,51 @@ pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account
         path,
         account_id,
         logged_in,
+    })
+}
+
+/// Transactional account creation workflow.
+///
+/// Preflights inputs and platform compatibility before filesystem modification.
+/// On platforms with validated shared-store support (Linux), links the profile
+/// to the shared store with automatic rollback on linking failure.
+/// On unverified platforms (Windows, macOS), uses isolation-only behavior,
+/// never invoking unsupported shared-store operations.
+pub fn add_account(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<AccountCreation> {
+    if !valid_name(name) {
+        return Err(Error::Msg(format!(
+            "invalid account name '{name}': use letters, digits, '-' or '_'"
+        )));
+    }
+    let path = p.profiles.join(name);
+    if path.exists() {
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+    if let Some(src) = clone_from {
+        let src_path = p.profiles.join(src);
+        if !src_path.is_dir() {
+            return Err(Error::Msg(format!("clone source '{src}' does not exist")));
+        }
+    }
+
+    let should_link =
+        crate::platform::capabilities().shared_store_compatibility == crate::platform::Support::Yes;
+
+    let account = create(p, name, clone_from)?;
+
+    if should_link {
+        if let Err(e) = crate::store::link_profile(p, name) {
+            // Transactional rollback: never leave partially initialized profiles on failure.
+            let _ = std::fs::remove_dir_all(&account.path);
+            return Err(Error::Msg(format!(
+                "could not link shared store for '{name}': {e}"
+            )));
+        }
+    }
+
+    Ok(AccountCreation {
+        account,
+        shared_store: should_link,
     })
 }
 

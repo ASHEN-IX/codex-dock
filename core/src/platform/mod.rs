@@ -10,9 +10,11 @@
 //!
 //! | Capability | Linux | macOS | Windows |
 //! |---|---|---|---|
-//! | shared-store links | yes (symlink) | yes (symlink) | no (needs Developer Mode; untested) |
-//! | process table (`/proc`) | yes | no (no `/proc`) | no |
-//! | window activation (KWin/wmctrl) | yes | no | no |
+//! | filesystem symlinks | yes | yes | no (needs Developer Mode) |
+//! | shared-store compatibility | yes | no (unvalidated; isolated) | no (unvalidated; isolated) |
+//! | native process discovery | yes (/proc) | no | no |
+//! | window activation | yes (KWin/wmctrl) | no | no |
+//! | safe desktop launch | yes | no | no |
 //!
 //! Behaviours that are plain std and identical everywhere (temp directories,
 //! file locks via `File::try_lock`, atomic writes, JSON settings) are *not*
@@ -35,14 +37,35 @@ pub enum Support {
 }
 
 /// What the running platform can do today. Produced, not assumed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
-    /// Symlink-style sharing of the Codex store between profiles.
-    pub shared_store_links: Support,
-    /// Enumerating running Codex Desktop windows.
-    pub process_table: Support,
-    /// Raising an existing window instead of spawning a duplicate.
+    /// Filesystem symlink availability: whether the OS and current privilege level
+    /// support creating filesystem symbolic links.
+    pub filesystem_symlinks: Support,
+    /// Validated shared-store compatibility: whether sharing the Codex SQLite database
+    /// and session rollouts across concurrent profile windows has been runtime-validated.
+    pub shared_store_compatibility: Support,
+    /// Native process discovery: whether running Codex Desktop processes/windows can be
+    /// discovered via OS process tables or system APIs.
+    pub native_process_discovery: Support,
+    /// Window activation: whether an existing window can be raised to the front
+    /// (e.g. via KWin D-Bus or wmctrl).
     pub window_activation: Support,
+    /// Safe desktop launching: whether Codex Desktop can be safely launched with
+    /// per-profile user data arguments and monitored on this platform.
+    pub safe_desktop_launch: Support,
+}
+
+impl Capabilities {
+    /// Backward-compatible alias for shared-store link operations.
+    pub fn shared_store_links(&self) -> Support {
+        self.shared_store_compatibility
+    }
+
+    /// Backward-compatible alias for process table discovery.
+    pub fn process_table(&self) -> Support {
+        self.native_process_discovery
+    }
 }
 
 /// The platform's measured capabilities. This is a cfg decision per OS, kept
@@ -50,43 +73,60 @@ pub struct Capabilities {
 pub fn capabilities() -> Capabilities {
     #[cfg(target_os = "linux")]
     {
-        let links = Support::Yes;
-        let process_table = Support::Yes;
-        let window_activation = Support::Yes;
         Capabilities {
-            shared_store_links: links,
-            process_table,
-            window_activation,
+            filesystem_symlinks: Support::Yes,
+            shared_store_compatibility: Support::Yes,
+            native_process_discovery: Support::Yes,
+            window_activation: Support::Yes,
+            safe_desktop_launch: Support::Yes,
         }
     }
     #[cfg(target_os = "macos")]
     {
         Capabilities {
-            shared_store_links: Support::Yes,
-            process_table: Support::No(
-                "process inspection reads /proc and that is Linux-only; macOS support is planned",
+            filesystem_symlinks: Support::Yes,
+            shared_store_compatibility: Support::No(
+                "shared-store runtime compatibility is not validated on macOS yet; profiles stay isolated",
+            ),
+            native_process_discovery: Support::No(
+                "process discovery reads /proc and that is Linux-only; macOS native process scanning is not implemented yet",
             ),
             window_activation: Support::No(
-                "window activation targets KWin/wmctrl; macOS support is planned",
+                "window activation targets KWin/wmctrl; macOS support is not implemented yet",
+            ),
+            safe_desktop_launch: Support::No(
+                "desktop launching requires verified macOS application bundle execution; not implemented yet",
             ),
         }
     }
     #[cfg(target_os = "windows")]
     {
         Capabilities {
-            shared_store_links: Support::No(
-                "creating symlinks needs Developer Mode or an elevated process; profiles stay isolated",
+            filesystem_symlinks: Support::No(
+                "creating symlinks needs Developer Mode or an elevated process",
             ),
-            process_table: Support::No("process inspection is not implemented for Windows yet"),
-            window_activation: Support::No("window activation is not implemented for Windows yet"),
+            shared_store_compatibility: Support::No(
+                "shared-store runtime compatibility is not validated on Windows yet; profiles stay isolated",
+            ),
+            native_process_discovery: Support::No(
+                "native process discovery is not implemented for Windows yet",
+            ),
+            window_activation: Support::No(
+                "window activation is not implemented for Windows yet",
+            ),
+            safe_desktop_launch: Support::No(
+                "desktop launching requires verified Windows process execution and argument escaping; not implemented yet",
+            ),
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Capabilities {
-            shared_store_links: Support::No("this platform is untested"),
-            process_table: Support::No("this platform is untested"),
+            filesystem_symlinks: Support::No("this platform is untested"),
+            shared_store_compatibility: Support::No("this platform is untested"),
+            native_process_discovery: Support::No("this platform is untested"),
             window_activation: Support::No("this platform is untested"),
+            safe_desktop_launch: Support::No("this platform is untested"),
         }
     }
 }
@@ -110,9 +150,14 @@ mod tests {
     fn every_capability_carries_a_reason_when_absent() {
         let caps = capabilities();
         for (name, support) in [
-            ("shared_store_links", caps.shared_store_links),
-            ("process_table", caps.process_table),
+            ("filesystem_symlinks", caps.filesystem_symlinks),
+            (
+                "shared_store_compatibility",
+                caps.shared_store_compatibility,
+            ),
+            ("native_process_discovery", caps.native_process_discovery),
             ("window_activation", caps.window_activation),
+            ("safe_desktop_launch", caps.safe_desktop_launch),
         ] {
             if let Support::No(reason) = support {
                 assert!(

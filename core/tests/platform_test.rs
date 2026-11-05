@@ -22,17 +22,21 @@ fn the_capability_report_matches_the_platform_it_runs_on() {
     let caps = platform::capabilities();
     #[cfg(target_os = "linux")]
     {
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert_eq!(caps.process_table, Support::Yes);
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert_eq!(caps.shared_store_compatibility, Support::Yes);
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert_eq!(caps.window_activation, Support::Yes);
+        assert_eq!(caps.safe_desktop_launch, Support::Yes);
     }
     #[cfg(target_os = "macos")]
     {
-        // Links are real, process and window features are reported absent
-        // with a reason rather than pretending.
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert!(matches!(caps.process_table, Support::No(r) if r.contains("/proc")));
+        // Links are real, but shared store is unverified, and process/window features
+        // are reported absent with a reason rather than pretending.
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
+        assert!(matches!(caps.native_process_discovery, Support::No(r) if r.contains("/proc")));
         assert!(matches!(caps.window_activation, Support::No(_)));
+        assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
 }
 
