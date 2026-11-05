@@ -235,6 +235,7 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
 
     // Re-check target existence after acquiring creation lock:
     if final_path.exists() || final_path.is_symlink() {
+        let _ = create_lock.unlock();
         let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Msg(format!("account '{name}' already exists")));
     }
@@ -247,6 +248,7 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
     let token = format!("{}-{}-{}", std::process::id(), nonce, name);
     let staging_dir = p.profiles.join(format!(".staging-{name}-{nonce}"));
     if let Err(e) = std::fs::create_dir_all(&staging_dir) {
+        let _ = create_lock.unlock();
         let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Io(e));
     }
@@ -255,6 +257,7 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
     let token_path = staging_dir.join(".dock-creation-token");
     if let Err(e) = std::fs::write(&token_path, &token) {
         let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = create_lock.unlock();
         let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Io(e));
     }
@@ -273,6 +276,7 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
             };
             if let Err(e) = copy_res {
                 let _ = std::fs::remove_dir_all(&staging_dir);
+                let _ = create_lock.unlock();
                 let _ = std::fs::remove_file(&create_lock_path);
                 return Err(e);
             }
@@ -282,15 +286,18 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
     // Atomic move from staging_dir to final_path:
     if final_path.exists() || final_path.is_symlink() {
         let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = create_lock.unlock();
         let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Msg(format!("account '{name}' already exists")));
     }
 
     if let Err(e) = std::fs::rename(&staging_dir, &final_path) {
         let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = create_lock.unlock();
         let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Io(e));
     }
+    let _ = create_lock.unlock();
     let _ = std::fs::remove_file(&create_lock_path);
 
     let (account_id, logged_in) = auth_info(&final_path.join("auth.json"));

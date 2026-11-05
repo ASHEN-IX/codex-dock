@@ -373,6 +373,20 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     repair_with_proc_root(p, backup, crate::platform::process::proc_root().as_deref())
 }
 
+struct RepairLocks {
+    locks: Vec<std::fs::File>,
+    repair_lock_path: PathBuf,
+}
+
+impl Drop for RepairLocks {
+    fn drop(&mut self) {
+        for f in &self.locks {
+            let _ = f.unlock();
+        }
+        let _ = std::fs::remove_file(&self.repair_lock_path);
+    }
+}
+
 pub fn repair_with_proc_root(
     p: &Paths,
     backup: &Path,
@@ -441,7 +455,10 @@ pub fn repair_with_proc_root(
         )
     })?;
 
-    let mut held_locks: Vec<std::fs::File> = vec![repair_lock];
+    let mut held_locks = RepairLocks {
+        locks: vec![repair_lock],
+        repair_lock_path: repair_lock_path.clone(),
+    };
 
     let base_launch_lock = p.base.join(".desktop-launch.lock");
     if let Ok(f) = std::fs::OpenOptions::new()
@@ -453,7 +470,7 @@ pub fn repair_with_proc_root(
         f.try_lock().map_err(|_| {
             Error::Msg("cannot repair: base profile launch is currently in progress".to_string())
         })?;
-        held_locks.push(f);
+        held_locks.locks.push(f);
     }
 
     let mut profile_dirs = Vec::new();
@@ -479,7 +496,7 @@ pub fn repair_with_proc_root(
                             "cannot repair: desktop launch is currently in progress for profile '{name}'"
                         ))
                     })?;
-                    held_locks.push(f);
+                    held_locks.locks.push(f);
                 }
                 profile_dirs.push((name, e.path()));
             }
