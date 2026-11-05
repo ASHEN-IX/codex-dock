@@ -40,6 +40,12 @@ pub fn home_dir() -> std::path::PathBuf {
 /// Parameterised on the home the paths live under, so injected test paths keep
 /// their `.config` inside the fixture instead of migrating to a real `$HOME`.
 pub fn config_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty()) {
+            return std::path::PathBuf::from(appdata);
+        }
+    }
     config_dir_at(&home_dir())
 }
 
@@ -51,10 +57,12 @@ pub fn config_dir_at(home: &std::path::Path) -> std::path::PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("APPDATA")
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+        if home == home_dir() {
+            if let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty()) {
+                return std::path::PathBuf::from(appdata);
+            }
+        }
+        home.join("AppData").join("Roaming")
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
