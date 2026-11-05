@@ -5,9 +5,9 @@
 //! - Platform capability separation (symlinks vs shared-store compatibility).
 //! - Windows and macOS isolation-only behavior.
 
+use codex_dock_core::{accounts, store, Paths};
 #[cfg(target_os = "linux")]
-use codex_dock_core::db;
-use codex_dock_core::{accounts, store, windows, Paths};
+use codex_dock_core::{db, windows};
 #[cfg(target_os = "linux")]
 use std::fs::File;
 use std::path::PathBuf;
