@@ -106,6 +106,15 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+fn validate_profile_name(name: &str, field: &str) -> Result<()> {
+    if !valid_name(name) || !safe_segment(name) {
+        return Err(Error::Msg(format!(
+            "invalid {field} '{name}': use letters, digits, '-' or '_'"
+        )));
+    }
+    Ok(())
+}
+
 /// Whether a profile name can be safely joined onto a directory without
 /// escaping it. Created profiles already pass [`valid_name`], but names also
 /// arrive from UI input, the CLI and disk listings, so the joins in
@@ -126,51 +135,180 @@ pub struct AccountCreation {
     pub shared_store: bool,
 }
 
-pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
-    if !valid_name(name) {
-        return Err(Error::Msg(format!(
-            "invalid account name '{name}': use letters, digits, '-' or '_'"
-        )));
+fn copy_file_secure(from: &Path, to: &Path, canonical_root: &Path) -> Result<()> {
+    if from.is_symlink() {
+        let resolved = std::fs::canonicalize(from)?;
+        if !resolved.starts_with(canonical_root) {
+            return Err(Error::Msg(format!(
+                "refusing to clone symlink '{}': target '{}' escapes source profile root",
+                from.display(),
+                resolved.display()
+            )));
+        }
     }
-    let path = p.profiles.join(name);
-    if path.exists() {
+    std::fs::copy(from, to).map(|_| ()).map_err(Error::Io)
+}
+
+fn copy_dir_secure(from: &Path, to: &Path, canonical_root: &Path) -> Result<()> {
+    if from.is_symlink() {
+        let resolved = std::fs::canonicalize(from)?;
+        if !resolved.starts_with(canonical_root) {
+            return Err(Error::Msg(format!(
+                "refusing to clone directory symlink '{}': target '{}' escapes source profile root",
+                from.display(),
+                resolved.display()
+            )));
+        }
+    }
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target = to.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let resolved = match std::fs::canonicalize(&entry_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(Error::Msg(format!(
+                        "cannot copy symlink '{}': failed to resolve target: {e}",
+                        entry_path.display()
+                    )));
+                }
+            };
+            if !resolved.starts_with(canonical_root) {
+                return Err(Error::Msg(format!(
+                    "refusing to clone symlink '{}': target '{}' escapes source profile root",
+                    entry_path.display(),
+                    resolved.display()
+                )));
+            }
+        }
+        if file_type.is_dir() {
+            copy_dir_secure(&entry_path, &target, canonical_root)?;
+        } else {
+            std::fs::copy(&entry_path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<(Account, String)> {
+    validate_profile_name(name, "account name")?;
+    let final_path = p.profiles.join(name);
+    if final_path.exists() || final_path.is_symlink() {
         return Err(Error::Msg(format!("account '{name}' already exists")));
     }
+
+    std::fs::create_dir_all(&p.profiles)?;
+    let canonical_profiles =
+        std::fs::canonicalize(&p.profiles).unwrap_or_else(|_| p.profiles.clone());
+
+    let mut canonical_src_opt = None;
     if let Some(src) = clone_from {
+        validate_profile_name(src, "clone source")?;
         let src_path = p.profiles.join(src);
         if !src_path.is_dir() {
             return Err(Error::Msg(format!("clone source '{src}' does not exist")));
         }
+        let canonical_src = std::fs::canonicalize(&src_path)?;
+        if !canonical_src.starts_with(&canonical_profiles) || canonical_src == canonical_profiles {
+            return Err(Error::Msg(format!(
+                "clone source '{src}' escapes profile root"
+            )));
+        }
+        canonical_src_opt = Some(canonical_src);
     }
-    std::fs::create_dir_all(&path)?;
 
-    if let Some(src) = clone_from {
+    // Synchronize simultaneous creation attempts using a profile creation lock:
+    let create_lock_path = p.profiles.join(format!(".create-{name}.lock"));
+    let create_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&create_lock_path)?;
+    create_lock.try_lock().map_err(|_| {
+        Error::Msg(format!(
+            "simultaneous account creation attempt in progress for '{name}'"
+        ))
+    })?;
+
+    // Re-check target existence after acquiring creation lock:
+    if final_path.exists() || final_path.is_symlink() {
+        let _ = std::fs::remove_file(&create_lock_path);
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+
+    // Stage in a temporary hidden directory:
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let token = format!("{}-{}-{}", std::process::id(), nonce, name);
+    let staging_dir = p.profiles.join(format!(".staging-{name}-{nonce}"));
+    if let Err(e) = std::fs::create_dir_all(&staging_dir) {
+        let _ = std::fs::remove_file(&create_lock_path);
+        return Err(Error::Io(e));
+    }
+
+    // Write ownership token inside staging directory:
+    let token_path = staging_dir.join(".dock-creation-token");
+    if let Err(e) = std::fs::write(&token_path, &token) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = std::fs::remove_file(&create_lock_path);
+        return Err(Error::Io(e));
+    }
+
+    if let Some(canonical_src) = canonical_src_opt {
         for item in ["config.toml", "rules", "skills"] {
-            let from = p.profiles.join(src).join(item);
-            if !from.exists() {
+            let from = canonical_src.join(item);
+            if !from.exists() && !from.is_symlink() {
                 continue;
             }
-            let to = path.join(item);
+            let to = staging_dir.join(item);
             let copy_res = if from.is_dir() {
-                copy_dir(&from, &to)
+                copy_dir_secure(&from, &to, &canonical_src)
             } else {
-                std::fs::copy(&from, &to).map(|_| ()).map_err(Error::Io)
+                copy_file_secure(&from, &to, &canonical_src)
             };
             if let Err(e) = copy_res {
-                // Roll back newly created profile directory on clone failure
-                let _ = std::fs::remove_dir_all(&path);
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                let _ = std::fs::remove_file(&create_lock_path);
                 return Err(e);
             }
         }
     }
 
-    let (account_id, logged_in) = auth_info(&path.join("auth.json"));
-    Ok(Account {
-        name: name.to_string(),
-        path,
-        account_id,
-        logged_in,
-    })
+    // Atomic move from staging_dir to final_path:
+    if final_path.exists() || final_path.is_symlink() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = std::fs::remove_file(&create_lock_path);
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+
+    if let Err(e) = std::fs::rename(&staging_dir, &final_path) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        let _ = std::fs::remove_file(&create_lock_path);
+        return Err(Error::Io(e));
+    }
+    let _ = std::fs::remove_file(&create_lock_path);
+
+    let (account_id, logged_in) = auth_info(&final_path.join("auth.json"));
+    Ok((
+        Account {
+            name: name.to_string(),
+            path: final_path,
+            account_id,
+            logged_in,
+        },
+        token,
+    ))
+}
+
+pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
+    let (account, _) = create_staged(p, name, clone_from)?;
+    let _ = std::fs::remove_file(account.path.join(".dock-creation-token"));
+    Ok(account)
 }
 
 /// Transactional account creation workflow.
@@ -181,55 +319,44 @@ pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account
 /// On unverified platforms (Windows, macOS), uses isolation-only behavior,
 /// never invoking unsupported shared-store operations.
 pub fn add_account(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<AccountCreation> {
-    if !valid_name(name) {
-        return Err(Error::Msg(format!(
-            "invalid account name '{name}': use letters, digits, '-' or '_'"
-        )));
-    }
-    let path = p.profiles.join(name);
-    if path.exists() {
-        return Err(Error::Msg(format!("account '{name}' already exists")));
-    }
+    validate_profile_name(name, "account name")?;
     if let Some(src) = clone_from {
-        let src_path = p.profiles.join(src);
-        if !src_path.is_dir() {
-            return Err(Error::Msg(format!("clone source '{src}' does not exist")));
-        }
+        validate_profile_name(src, "clone source")?;
     }
 
     let should_link =
         crate::platform::capabilities().shared_store_compatibility == crate::platform::Support::Yes;
 
-    let account = create(p, name, clone_from)?;
+    let (account, token) = create_staged(p, name, clone_from)?;
 
     if should_link {
         if let Err(e) = crate::store::link_profile(p, name) {
-            // Transactional rollback: never leave partially initialized profiles on failure.
-            let _ = std::fs::remove_dir_all(&account.path);
-            return Err(Error::Msg(format!(
-                "could not link shared store for '{name}': {e}"
-            )));
+            // Ownership-safe rollback:
+            // Never delete or overwrite pre-existing profile data during rollback.
+            // Do not delete a target directory if ownership cannot be established.
+            let token_path = account.path.join(".dock-creation-token");
+            let disk_token = std::fs::read_to_string(&token_path).unwrap_or_default();
+            if disk_token == token {
+                let _ = std::fs::remove_dir_all(&account.path);
+                return Err(Error::Msg(format!(
+                    "could not link shared store for '{name}': {e}"
+                )));
+            } else {
+                return Err(Error::Msg(format!(
+                    "could not link shared store for '{name}': {e}; rollback aborted: ownership of '{}' could not be established",
+                    account.path.display()
+                )));
+            }
         }
     }
+
+    // Clean up ownership token upon completed successful creation:
+    let _ = std::fs::remove_file(account.path.join(".dock-creation-token"));
 
     Ok(AccountCreation {
         account,
         shared_store: should_link,
     })
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
 }
 
 pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {

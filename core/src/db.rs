@@ -54,6 +54,40 @@ pub fn quick_check(db: &Path) -> Result<bool> {
     Ok(out.trim() == "ok")
 }
 
+/// Proactively verify that SQLite can acquire an EXCLUSIVE lock on the database.
+///
+/// In SQLite Unix VFS (as well as Windows and macOS VFS), setting `PRAGMA locking_mode = EXCLUSIVE`
+/// and initiating an `EXCLUSIVE` transaction requires SQLite to acquire exclusive locks
+/// on the database and WAL/SHM coordination structures. If another connection has an active
+/// transaction or open writer handle, SQLite will return `SQLITE_BUSY` ("database is locked").
+pub fn verify_sqlite_exclusive(db: &Path) -> Result<()> {
+    if !db.exists() {
+        return Ok(());
+    }
+    let out = Command::new("sqlite3")
+        .arg("-cmd")
+        .arg(".timeout 50")
+        .arg(db)
+        .arg("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;")
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::Msg("sqlite3 not found in PATH".into())
+            } else {
+                Error::Io(e)
+            }
+        })?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(Error::Msg(format!(
+            "database '{}' is locked by an active SQLite connection or transaction: {stderr}",
+            db.display()
+        )));
+    }
+    Ok(())
+}
+
 pub fn inode(path: &Path) -> Result<u64> {
     match crate::platform::fs::file_identity(path) {
         Some(ino) => Ok(ino),

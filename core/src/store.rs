@@ -210,6 +210,165 @@ fn ensure_unlocked(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn check_proc_file_handles_and_locks(proc_root: &Path, target_paths: &[PathBuf]) -> Result<()> {
+    if !crate::platform::process::supported() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+
+    // Build target representations: canonical paths and (dev, ino, maj, min)
+    struct TargetInfo<'a> {
+        path: &'a PathBuf,
+        canonical: PathBuf,
+        #[cfg(unix)]
+        dev: u64,
+        #[cfg(unix)]
+        ino: u64,
+        #[cfg(unix)]
+        maj: u32,
+        #[cfg(unix)]
+        min: u32,
+    }
+
+    let mut targets: Vec<TargetInfo> = Vec::new();
+    for path in target_paths {
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        #[cfg(unix)]
+        if let Ok(meta) = path.metadata() {
+            let dev = meta.dev();
+            let ino = meta.ino();
+            let maj = ((dev >> 8) & 0xfff) as u32;
+            let min = ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as u32;
+            targets.push(TargetInfo {
+                path,
+                canonical,
+                dev,
+                ino,
+                maj,
+                min,
+            });
+            continue;
+        }
+        #[cfg(not(unix))]
+        targets.push(TargetInfo { path, canonical });
+    }
+
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let my_pid = std::process::id();
+
+    // 1. Check /proc/locks for POSIX/OFD/FLOCK locks
+    let locks_path = proc_root.join("locks");
+    if locks_path.is_file() {
+        let locks_data = std::fs::read_to_string(&locks_path).map_err(|e| {
+            Error::Msg(format!(
+                "cannot read '{}' to verify active locks: {e}",
+                locks_path.display()
+            ))
+        })?;
+        for line in locks_data.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            // Line format: e.g. "1: POSIX ADVISORY WRITE 1234 08:01:19542 0 EOF"
+            if parts.len() >= 6 {
+                let pid_str = parts[4];
+                let pid = pid_str.parse::<u32>().unwrap_or(0);
+                if pid == my_pid {
+                    continue;
+                }
+                let maj_min_ino: Vec<&str> = parts[5].split(':').collect();
+                if maj_min_ino.len() == 3 {
+                    #[cfg(unix)]
+                    if let (Ok(maj), Ok(min), Ok(ino)) = (
+                        u32::from_str_radix(maj_min_ino[0], 16),
+                        u32::from_str_radix(maj_min_ino[1], 16),
+                        maj_min_ino[2].parse::<u64>(),
+                    ) {
+                        if let Some(t) = targets
+                            .iter()
+                            .find(|t| t.ino == ino && t.maj == maj && t.min == min)
+                        {
+                            return Err(Error::Msg(format!(
+                                "cannot repair: active lock detected in process table on '{}' (inode {ino}, pid {pid})",
+                                t.path.display()
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Scan open file descriptors in /proc/*/fd/*
+    let rd = std::fs::read_dir(proc_root).map_err(|e| {
+        Error::Msg(format!(
+            "failed to read process directory '{}': {e}",
+            proc_root.display()
+        ))
+    })?;
+    for entry in rd {
+        let entry = entry.map_err(|e| Error::Msg(format!("failed to read process entry: {e}")))?;
+        let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if pid == my_pid {
+            continue;
+        }
+        let fd_dir = entry.path().join("fd");
+        let fd_rd = match std::fs::read_dir(&fd_dir) {
+            Ok(r) => r,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                continue;
+            }
+            Err(e) => {
+                return Err(Error::Msg(format!(
+                    "failed to read file descriptors for pid {pid}: {e}"
+                )))
+            }
+        };
+        for fd_entry in fd_rd.flatten() {
+            if let Ok(link) = std::fs::read_link(fd_entry.path()) {
+                let link_str = link.to_string_lossy();
+                for t in &targets {
+                    let c_str = t.canonical.to_string_lossy();
+                    let p_str = t.path.to_string_lossy();
+                    if link_str == c_str
+                        || link_str == p_str
+                        || link_str.starts_with(&format!("{c_str} "))
+                        || link_str.starts_with(&format!("{p_str} "))
+                    {
+                        return Err(Error::Msg(format!(
+                            "cannot repair: process pid {pid} has an open file handle to '{}'",
+                            t.path.display()
+                        )));
+                    }
+                }
+            }
+            #[cfg(unix)]
+            if let Ok(meta) = fd_entry.metadata() {
+                if meta.is_file() {
+                    let dev = meta.dev();
+                    let ino = meta.ino();
+                    if let Some(t) = targets.iter().find(|t| t.dev == dev && t.ino == ino) {
+                        return Err(Error::Msg(format!(
+                            "cannot repair: process pid {pid} has open file handle to inode {ino} ('{}')",
+                            t.path.display()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     repair_with_proc_root(p, backup, crate::platform::process::proc_root().as_deref())
 }
@@ -232,44 +391,176 @@ pub fn repair_with_proc_root(
         )));
     }
 
-    // 3. Fail-closed if active Codex windows or processes are running for this store
-    if let Some(root) = proc_root {
-        let running = crate::windows::running(root);
-        let config_root = crate::platform::fs::config_dir_at(p.home());
-        let active_for_store: Vec<String> = running
-            .into_iter()
-            .filter(|w| {
-                if !w.user_data_dir.as_os_str().is_empty()
-                    && w.user_data_dir.starts_with(&config_root)
-                {
-                    return true;
+    // 3. Reject missing or unreadable process-discovery root
+    let root = match proc_root {
+        Some(r) => {
+            if !r.exists() {
+                return Err(Error::Msg(format!(
+                    "cannot safely repair: process discovery root '{}' does not exist",
+                    r.display()
+                )));
+            }
+            if !r.is_dir() {
+                return Err(Error::Msg(format!(
+                    "cannot safely repair: process discovery root '{}' is not a directory",
+                    r.display()
+                )));
+            }
+            if let Err(e) = std::fs::read_dir(r) {
+                return Err(Error::Msg(format!(
+                    "cannot safely repair: failed to read process discovery root '{}': {e}",
+                    r.display()
+                )));
+            }
+            r
+        }
+        None => {
+            return Err(Error::Msg(
+                "cannot safely repair: process discovery root is unavailable; active processes and writers cannot be verified".to_string()
+            ));
+        }
+    };
+
+    // 4. Synchronize Dock operations: acquire and hold global repair lock and all profile launch locks
+    let repair_lock_path = p.base.join(".dock-repair.lock");
+    let repair_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&repair_lock_path)
+        .map_err(|e| {
+            Error::Msg(format!(
+                "cannot open repair lock file '{}': {e}",
+                repair_lock_path.display()
+            ))
+        })?;
+    repair_lock.try_lock().map_err(|_| {
+        Error::Msg(
+            "cannot repair: another Codex Dock repair operation is currently running".to_string(),
+        )
+    })?;
+
+    let mut held_locks: Vec<std::fs::File> = vec![repair_lock];
+
+    let base_launch_lock = p.base.join(".desktop-launch.lock");
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&base_launch_lock)
+    {
+        f.try_lock().map_err(|_| {
+            Error::Msg("cannot repair: base profile launch is currently in progress".to_string())
+        })?;
+        held_locks.push(f);
+    }
+
+    let mut profile_dirs = Vec::new();
+    let base_canonical = std::fs::canonicalize(&p.base).ok();
+    if let Ok(rd) = std::fs::read_dir(&p.profiles) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') && e.path().is_dir() {
+                let prof_canonical = std::fs::canonicalize(e.path()).ok();
+                let is_base = base_canonical.is_some() && base_canonical == prof_canonical;
+                if !is_base {
+                    let prof_launch_lock = e.path().join(".desktop-launch.lock");
+                    let f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .truncate(false)
+                        .write(true)
+                        .open(&prof_launch_lock)
+                        .map_err(|e| {
+                            Error::Msg(format!("cannot open launch lock for profile '{name}': {e}"))
+                        })?;
+                    f.try_lock().map_err(|_| {
+                        Error::Msg(format!(
+                            "cannot repair: desktop launch is currently in progress for profile '{name}'"
+                        ))
+                    })?;
+                    held_locks.push(f);
                 }
-                let env =
-                    std::fs::read(root.join(w.pid.to_string()).join("environ")).unwrap_or_default();
-                env.split(|b| *b == 0)
-                    .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
-                    .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
-                    .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
-                    .unwrap_or(false)
-            })
-            .map(|w| format!("pid {} ({})", w.pid, w.account))
-            .collect();
-        if !active_for_store.is_empty() {
-            return Err(Error::Msg(format!(
-                "cannot repair shared store while Codex windows are running (found: {}); close all Codex windows first",
-                active_for_store.join(", ")
-            )));
+                profile_dirs.push((name, e.path()));
+            }
+        }
+    }
+    profile_dirs.sort();
+
+    // 5. Fail-closed if active Codex windows or processes are running for this store
+    let running = crate::windows::scan_running(root)?;
+    let config_root = crate::platform::fs::config_dir_at(p.home());
+    let active_for_store: Vec<String> = running
+        .into_iter()
+        .filter(|w| {
+            if !w.user_data_dir.as_os_str().is_empty() && w.user_data_dir.starts_with(&config_root)
+            {
+                return true;
+            }
+            let env =
+                std::fs::read(root.join(w.pid.to_string()).join("environ")).unwrap_or_default();
+            env.split(|b| *b == 0)
+                .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
+                .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
+                .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
+                .unwrap_or(false)
+        })
+        .map(|w| format!("pid {} ({})", w.pid, w.account))
+        .collect();
+    if !active_for_store.is_empty() {
+        return Err(Error::Msg(format!(
+            "cannot repair shared store while Codex windows are running (found: {}); close all Codex windows first",
+            active_for_store.join(", ")
+        )));
+    }
+
+    // 6. Fail-closed if active database writers, locks, or open file handles are detected
+    let mut candidate_files = Vec::new();
+    let base_db = p.base.join("state_5.sqlite");
+    if base_db.is_file() {
+        candidate_files.push(base_db.clone());
+        let base_wal = p.base.join("state_5.sqlite-wal");
+        if base_wal.is_file() {
+            candidate_files.push(base_wal);
+        }
+        let base_shm = p.base.join("state_5.sqlite-shm");
+        if base_shm.is_file() {
+            candidate_files.push(base_shm);
         }
     }
 
-    // 4. Fail-closed if active database writers or launch locks are detected
-    let base_db = p.base.join("state_5.sqlite");
-    if base_db.is_file() {
-        ensure_unlocked(&base_db, "base database (state_5.sqlite)")?;
-        let base_wal = p.base.join("state_5.sqlite-wal");
-        if base_wal.is_file() {
-            ensure_unlocked(&base_wal, "base WAL file (state_5.sqlite-wal)")?;
+    for (_name, prof_dir) in &profile_dirs {
+        let prof_db = prof_dir.join("state_5.sqlite");
+        if prof_db.is_file() && !prof_db.is_symlink() {
+            candidate_files.push(prof_db.clone());
+            let prof_wal = prof_dir.join("state_5.sqlite-wal");
+            if prof_wal.is_file() {
+                candidate_files.push(prof_wal);
+            }
+            let prof_shm = prof_dir.join("state_5.sqlite-shm");
+            if prof_shm.is_file() {
+                candidate_files.push(prof_shm);
+            }
         }
+    }
+
+    // 6a. Scan /proc for open file handles or /proc/locks
+    check_proc_file_handles_and_locks(root, &candidate_files)?;
+
+    // 6b. Verify SQLite exclusive lock using SQLite's own engine (detects active transactions)
+    if base_db.is_file() {
+        crate::db::verify_sqlite_exclusive(&base_db)?;
+    }
+    for (_name, prof_dir) in &profile_dirs {
+        let prof_db = prof_dir.join("state_5.sqlite");
+        if prof_db.is_file() && !prof_db.is_symlink() {
+            crate::db::verify_sqlite_exclusive(&prof_db)?;
+        }
+    }
+
+    // 6c. Check OS file-level try_lock as defense-in-depth
+    for f in &candidate_files {
+        ensure_unlocked(f, &f.display().to_string())?;
     }
 
     let writer_locks_dir = p.base.join("thread-writer-locks");
@@ -280,28 +571,6 @@ pub fn repair_with_proc_root(
                 if path.is_file() {
                     ensure_unlocked(&path, &format!("thread writer lock '{}'", path.display()))?;
                 }
-            }
-        }
-    }
-
-    let mut profile_dirs = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&p.profiles) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && e.path().is_dir() {
-                let launch_lock = e.path().join(".desktop-launch.lock");
-                if launch_lock.is_file() {
-                    ensure_unlocked(&launch_lock, &format!("launch lock for profile '{name}'"))?;
-                }
-                let prof_db = e.path().join("state_5.sqlite");
-                if prof_db.is_file() && !prof_db.is_symlink() {
-                    ensure_unlocked(&prof_db, &format!("database for profile '{name}'"))?;
-                    let prof_wal = e.path().join("state_5.sqlite-wal");
-                    if prof_wal.is_file() {
-                        ensure_unlocked(&prof_wal, &format!("WAL file for profile '{name}'"))?;
-                    }
-                }
-                profile_dirs.push((name, e.path()));
             }
         }
     }

@@ -51,14 +51,37 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
         crate::platform::capabilities().native_process_discovery,
         "desktop launch",
     )?;
+
+    // 1. Check if a Codex Dock repair is currently active; refuse launch to prevent conflicting writes
+    let repair_lock_path = p.base.join(".dock-repair.lock");
+    if repair_lock_path.is_file() {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&repair_lock_path)
+        {
+            if file.try_lock().is_err() {
+                return Err(Error::Msg(
+                    "cannot launch desktop: Codex Dock repair is currently in progress".to_string(),
+                ));
+            }
+            let _ = file.unlock();
+        }
+    }
+
     let proc_root = crate::platform::process::proc_root().expect("probe capability just checked");
     let _lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(p.profiles.join(name).join(".desktop-launch.lock"))?;
-    _lock.lock()?;
-    if let Some(existing) = running_for(p, &proc_root)
+    _lock.try_lock().map_err(|_| {
+        Error::Msg(format!(
+            "cannot launch desktop: profile '{name}' is currently locked by a repair or launch operation"
+        ))
+    })?;
+
+    if let Some(existing) = scan_running_for(p, &proc_root)?
         .into_iter()
         .find(|w| w.account == name)
     {
@@ -82,7 +105,11 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     // Keep the launch lock until the shell wrapper has exec'd Electron, so a
     // concurrent click can discover the process before deciding to launch.
     for _ in 0..50 {
-        if running_for(p, &proc_root).iter().any(|w| w.account == name) {
+        if scan_running_for(p, &proc_root)
+            .unwrap_or_default()
+            .iter()
+            .any(|w| w.account == name)
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -94,26 +121,70 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     })
 }
 
-pub fn running(proc_root: &Path) -> Vec<WindowProc> {
-    // A platform without a process table reports "no windows observed", which
-    // is only ever reached through the capability checks in `launch`/`focus`;
-    // direct callers get the empty list rather than a procfs permission lie.
+/// Fail-closed native process discovery scanning the given `proc_root`.
+/// Returns an error if the process table cannot be read or verified.
+pub fn scan_running(proc_root: &Path) -> Result<Vec<WindowProc>> {
     if !crate::platform::process::supported() {
-        return Vec::new();
+        return Err(Error::Msg(
+            "native process discovery is not supported on this platform".to_string(),
+        ));
     }
+    if !proc_root.exists() {
+        return Err(Error::Msg(format!(
+            "process discovery root '{}' does not exist",
+            proc_root.display()
+        )));
+    }
+    if !proc_root.is_dir() {
+        return Err(Error::Msg(format!(
+            "process discovery root '{}' is not a directory",
+            proc_root.display()
+        )));
+    }
+    let rd = std::fs::read_dir(proc_root).map_err(|e| {
+        Error::Msg(format!(
+            "failed to read process discovery root '{}': {e}",
+            proc_root.display()
+        ))
+    })?;
+
     let mut out = Vec::new();
-    let rd = match std::fs::read_dir(proc_root) {
-        Ok(r) => r,
-        Err(_) => return out,
-    };
-    for entry in rd.flatten() {
+    for entry in rd {
+        let entry = entry.map_err(|e| {
+            Error::Msg(format!(
+                "failed to enumerate process directory entry in '{}': {e}",
+                proc_root.display()
+            ))
+        })?;
         let pid: u32 = match entry.file_name().to_string_lossy().parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
-        let raw = match std::fs::read(entry.path().join("cmdline")) {
+        let cmdline_path = entry.path().join("cmdline");
+        let raw = match std::fs::read(&cmdline_path) {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Transient process exited between read_dir and read(cmdline).
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Check if this unreadable process could be a Codex process candidate.
+                let comm_path = entry.path().join("comm");
+                let comm = std::fs::read_to_string(&comm_path).unwrap_or_default();
+                let comm_trimmed = comm.trim();
+                if matches!(comm_trimmed, "chatgpt" | "ChatGPT" | "codex-desktop") {
+                    return Err(Error::Msg(format!(
+                        "permission denied inspecting candidate Codex process pid {pid}: {e}"
+                    )));
+                }
+                continue;
+            }
+            Err(e) => {
+                return Err(Error::Msg(format!(
+                    "failed to read command line for pid {pid} at '{}': {e}",
+                    cmdline_path.display()
+                )));
+            }
         };
         let mut args: Vec<_> = raw
             .split(|b| *b == 0)
@@ -163,18 +234,17 @@ pub fn running(proc_root: &Path) -> Vec<WindowProc> {
         });
     }
     out.sort_by_key(|a| a.pid);
-    out
+    Ok(out)
 }
 
-/// Bring an existing Codex window for `account` to the front instead of
-/// spawning a duplicate. KDE Plasma on Wayland exposes window control through
-/// KWin's scripting D-Bus interface; on other desktops `wmctrl` is the
-/// fallback. Both are best-effort: failing to raise a window must not stop the
-/// caller. Launching an already-running account still reuses its process.
-/// Resolve legacy/default processes to their current account identity.
-pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
+pub fn running(proc_root: &Path) -> Vec<WindowProc> {
+    scan_running(proc_root).unwrap_or_default()
+}
+
+pub fn scan_running_for(p: &Paths, proc_root: &Path) -> Result<Vec<WindowProc>> {
     let visible = accounts::list(p).unwrap_or_default();
-    running(proc_root)
+    let procs = scan_running(proc_root)?;
+    Ok(procs
         .into_iter()
         .map(|mut w| {
             let env = std::fs::read(proc_root.join(w.pid.to_string()).join("environ"))
@@ -197,13 +267,15 @@ pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
                 }
             }
             if w.user_data_dir.as_os_str().is_empty() {
-                // Electron's default per-app location for a window we launched
-                // without our flag, anchored at this Paths' home.
                 w.user_data_dir = crate::platform::fs::config_dir_at(p.home()).join("Codex");
             }
             w
         })
-        .collect()
+        .collect())
+}
+
+pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
+    scan_running_for(p, proc_root).unwrap_or_default()
 }
 
 pub fn focus(account: &str) -> bool {
