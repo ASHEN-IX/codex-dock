@@ -17,6 +17,21 @@ pub fn home_dir() -> std::path::PathBuf {
             return std::path::PathBuf::from(home);
         }
     }
+    #[cfg(windows)]
+    {
+        if let Some(home) = std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()) {
+            return std::path::PathBuf::from(home);
+        }
+        if let (Some(drive), Some(path)) = (
+            std::env::var_os("HOMEDRIVE").filter(|s| !s.is_empty()),
+            std::env::var_os("HOMEPATH").filter(|s| !s.is_empty()),
+        ) {
+            let mut p = std::path::PathBuf::from(drive);
+            p.push(path);
+            return p;
+        }
+    }
+    #[allow(deprecated)]
     std::env::home_dir().expect("HOME not set")
 }
 

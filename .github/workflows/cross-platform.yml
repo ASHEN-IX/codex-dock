@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - name: Set up Rust
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
           rustup default stable
       - name: Set up Linux build dependencies
         if: runner.os == 'Linux'
@@ -38,9 +38,12 @@ jobs:
         run: cargo test --locked -p codex-dock-core
       - name: Lint the complete workspace
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      # Native compilation: the Tauri shell and the headless CLI behind the
-      # platform adapters. This is a check, not a bundle build; installers and
-      # signing are intentionally absent from Phase 1 gates.
+      # Native compilation: core library, headless CLI, and Tauri shell behind
+      # the platform adapters, verified separately.
+      - name: Check the core library natively
+        run: cargo check --locked -p codex-dock-core --lib
+      - name: Check the CLI natively
+        run: cargo check --locked -p codex-dock-core --bin codex-dock-cli
       - name: Check the desktop shell natively
         run: cargo check --locked -p codex-dock
   gate:

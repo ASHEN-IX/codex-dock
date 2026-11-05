@@ -77,11 +77,17 @@ Live evidence on the development machine (2026-11-05, read-only inspection):
 - Codex CLI `codex-cli 0.164.0`; `~/.codex/version.json` advertises an
   available `0.165.0` → CLI surface can move under us between releases.
 - The shared-store inventory in `store.rs` (`SHARED`) is **out of date with
-  what the installed desktop writes**. Current `~/.codex` additionally holds:
+  what the installed desktop writes**, and the layout is a *moving target*:
+  the Phase 1 audit (2026-11-05 morning) and the T0 re-audit (same day, later)
+  differ. Current `~/.codex` additionally holds (vs `SHARED`):
   `thread_history_1.sqlite` (+wal/shm), `goals_1.sqlite`, `logs_2.sqlite`,
-  `queue_1.sqlite`, `session_index.jsonl`, `shell_snapshots/`,
-  `thread-writer-locks/`, `rollout-migrations/`, `attachments/`,
-  `ambient-suggestions/`, `app-server-daemon/`.
+  `memories_1.sqlite`, `queue_1.sqlite`, `session_index.jsonl`,
+  `archived_sessions/`, `shell_snapshots/`, `thread-writer-locks/`,
+  `rollout-migrations/`, `attachments/`, `ambient-suggestions/`,
+  `app-server-daemon/`, `ipc/`, `replays/`, `node_repl/`, `generated_images/`,
+  `computer-use/`, `external_agent_session_imports.json`,
+  `project-metadata-locks/`. New stores may appear in any desktop release;
+  capability T0→T5 must re-audit instead of freezing this list.
 - Schema inspection on **copies** (never on the live files): bases
   `secondary=163MB/24,277 items`, `work=113MB/8,251`, base `150MB/33,133`.
   `thread_history_1.sqlite` is a *projection* store (`thread_items`,
@@ -99,6 +105,43 @@ Live evidence on the development machine (2026-11-05, read-only inspection):
 - Windows/macOS equivalents of all of the above: **unverified**. The Windows
   desktop build is a separate Electron target with its own store layout; macOS
   likewise. Dock must not assume flag parity on those platforms.
+
+### 4.1 Store-classification of the observed layout
+
+Each file in `~/.codex` classified by its role, from schema inspection of
+byte-copies (authoritativeness is *assigned*, never invented: a class is only
+stated when the schema or live behavior shows which file stands behind it).
+
+| Class | Files | Evidence / behavior |
+|---|---|---|
+| **Authoritative (shared, source of truth)** | `sessions/*.jsonl` rollout files; `archived_sessions/` (aged rollouts); `state_5.sqlite` threads tables; `auth.json`; `history.jsonl`; `config.toml` | Rollouts are the transcripts the desktop writes on every turn; archived rollouts remain evidence of past chats even after a window forgets them; `state_5` is the store `repair` links and `PRAGMA quick_check`s. These are what the shared store already hard-links today. |
+| **Derived projection (per-profile, built FROM rollouts)** | `thread_history_1.sqlite` (`thread_items`, `thread_turns`, `thread_history_projection_state` with `next_rollout_byte_offset/ordinal`, sqlx migrations v8); `session_index.jsonl` | Pure projections of the rollout stream: the projection state records a byte offset + ordinal *into the rollout file*, so it can be rebuilt. Bases observed diverging across profiles (§4) — divergence is display-level, not data loss. Repairing/rebuilding is possible because rollouts exist; making these shared is **not** proposed until T1 proves the desktop tolerates it. |
+| **Per-window mutable (unmanaged)** | `logs_2.sqlite`, `queue_1.sqlite`, `goals_1.sqlite`, `memories_1.sqlite`, `sqlite/codex-dev.db` (+wal/shm: `automations`, `automation_runs`, `local_thread_catalog_*`, schema v34 — appeared after the Phase 1 audit; role and authority **TBD**, must go through the same evidence process before any linking), `shell_snapshots/`, `attachments/`, `ambient-suggestions/`, `app-server-daemon/`, `app-server-control/`, `rollout-migrations/`, `ipc/` (unix socket), `replays/`, `node_repl/`, `generated_images/`, `computer-use/`, `external_agent_session_imports.json`, `thread-writer-locks/`, `project-metadata-locks/` | High-frequency write targets and per-window coordination state. Dock deliberately does not link or copy these; every window owns its own. |
+| **Cache/ephemeral (unmanaged)** | `cache/`, `log/`, `models_cache.json`, `tmp/`, `installation_id`, temp dirs, caches inside per-window `Codex-*` config dirs | Regenerable; out of scope. |
+
+**Concurrent-write hazards observed or inferred (documented, not fixed in
+Phase 1) — all live in the *shared* class, which is why the standing rule
+"never repair/merge while windows are running" exists:**
+
+1. `state_5.sqlite` + wal/shm: multiple windows holding `CODEX_HOME` on the
+   same inode write concurrently; SQLite WAL tolerates same-file multi-writer
+   access (that is its job), but a *file displacement* under open writers does
+   not — hence repair's move-aside ordering matters and refuses nothing else.
+2. Rollout-file growth while a projection reader scans: `rollout-migrations/`
+   and `next_rollout_byte_offset` suggest incremental re-reading of the same
+   rollout file from two processes (window + any projection builder); a
+   repair-time merge writing a rollout while a window tail-reads it could
+   corrupt the projection state rather than the rollout itself.
+3. `history.jsonl` appends from N windows: append-only writes share one
+   descriptor target; interleaving is tolerated by line-oriented readers, but
+   truncation/merge is not — repair must never rewrite it (it does not; merge
+   covers `state_5` + project sidebars only).
+4. `thread-writer-locks/` shows the desktop itself fences projection writers;
+   Dock being lock-aware is future work (T3 acceptance couples repair with
+   running-window detection).
+
+No new shared-database assumptions were introduced; this classification only
+restates the Phase 1 audit so T1 has a checklist to verify per OS.
 
 ## 5. Per-OS storage strategy (safe defaults)
 
@@ -156,15 +199,18 @@ manual smoke with disposable profiles.
 ### T4 — Packaging (see §8) and signed releases, per OS, gated by manual smoke.
 ### T5 — Usage/ping surface per OS — re-verify `codex` CLI flags on each OS
 CLI version drift (0.164 → 0.165+) can change `exec --ignore-user-config` or
-app-server RPC shapes. Acceptance: usage/ping verified per OS with disposable
-accounts, no fabricated readings.
+app-server RPC shapes. On Linux this is now machine-checked before every ping
+(help-based capability probe), which also tolerates CLIs older/newer than the
+documented 0.166 floor; usage reads do not have an equivalent probe yet.
+Acceptance: usage/ping verified per OS with disposable accounts, no fabricated
+readings.
 
 ## 7. Risk register
 
 | ID | Risk | Impact | Mitigation / status |
 |---|---|---|---|
 | R1 | Store inventory drift (§4): desktop writes more stores than `SHARED` links | users report "chats differ between windows" | Documented as Partial; T1 verification; no code change until understood |
-| R2 | CLI version drift (`exec` / app-server flags) | usage/ping silently break | error messages refuse to fabricate readings; runtime check per release (T5) |
+| R2 | CLI version drift (`exec` / app-server flags) | usage/ping silently break | pings now probe `codex exec --help` and refuse **before recording a cooldown or spending allowance** when the required flag surface is missing or unqueryable (`tool::require_exec_support`); app-server RPC shapes still only refused by failing honestly (T5 re-verification per release) |
 | R3 | Windows symlink privilege | sharing silently degrades | capability refusal; isolation is the supported Windows shape in Phase 1 |
 | R4 | `/proc` semantics differ (mac) | duplicate windows / wrong focus | process table `No` on mac; launch refuses honestly |
 | R5 | `thread_history` projection divergence on same thread | inconsistent history display | T1; only rollouts are authoritative today |
