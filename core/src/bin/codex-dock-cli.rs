@@ -146,11 +146,8 @@ fn cmd_add(p: &Paths, name: &str, clone_from: Option<&str>) -> i32 {
             return 1;
         }
     };
-    println!(
-        "created '{}' ({})",
-        res.account.name,
-        res.account.path.display()
-    );
+    let profile_path = p.profiles.join(name);
+    println!("created '{name}' ({})", profile_path.display());
     if res.shared_store {
         println!("store:   linked to the shared database");
     } else {
