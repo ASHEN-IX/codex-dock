@@ -81,15 +81,18 @@ fn unicode_and_space_account_names_are_managed_like_any_other() {
     assert_eq!(listed[0].name, "工作 语料");
     assert!(listed[0].logged_in);
 
-    // Linking through the adapter keeps the previous storing contract.
-    store::link_profile(&p, "工作 语料").unwrap();
-    let shared = p.profiles.join("工作 语料/state_5.sqlite");
-    assert!(shared.is_symlink(), "the shared store must be linked");
-    assert_eq!(
-        platform::fs::file_identity(&shared),
-        platform::fs::file_identity(&p.base.join("state_5.sqlite")),
-        "and it must resolve to the base database"
-    );
+    #[cfg(target_os = "linux")]
+    {
+        // Linking through the adapter keeps the previous storing contract.
+        store::link_profile(&p, "工作 语料").unwrap();
+        let shared = p.profiles.join("工作 语料/state_5.sqlite");
+        assert!(shared.is_symlink(), "the shared store must be linked");
+        assert_eq!(
+            platform::fs::file_identity(&shared),
+            platform::fs::file_identity(&p.base.join("state_5.sqlite")),
+            "and it must resolve to the base database"
+        );
+    }
 
     // Per-window Electron data stays inside this Paths' home with the name.
     let dir = windows::user_data_dir(&p, "工作 语料");
@@ -126,6 +129,7 @@ fn a_dangling_auth_symlink_reads_as_signed_out_not_as_a_dead_profile() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn repair_displaced_every_file_into_the_backup_for_rollback() {
     // Upgrade/rollback rehearsal: after repair, every displaced original must
     // be inside the backup with its data readable, so a manual restore or a

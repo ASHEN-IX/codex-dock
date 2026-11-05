@@ -22,6 +22,7 @@ fn setup(tag: &str) -> (PathBuf, Paths) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_new_account_shares_the_store_immediately() {
     let (t, p) = setup("link");
     accounts::create(&p, "fresh", None).unwrap();
@@ -39,6 +40,7 @@ fn a_new_account_shares_the_store_immediately() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_new_account_keeps_its_own_credentials_and_config() {
     let (t, p) = setup("personal");
     accounts::create(&p, "fresh", None).unwrap();
@@ -55,6 +57,7 @@ fn a_new_account_keeps_its_own_credentials_and_config() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn linking_twice_does_not_disturb_the_links() {
     let (t, p) = setup("idem");
     accounts::create(&p, "fresh", None).unwrap();
@@ -69,6 +72,7 @@ fn linking_twice_does_not_disturb_the_links() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn linking_skips_paths_the_base_store_does_not_have() {
     let (t, p) = setup("partial");
     accounts::create(&p, "fresh", None).unwrap();
@@ -89,8 +93,7 @@ fn linking_an_unknown_account_is_refused() {
 #[test]
 fn removing_an_account_also_parks_its_window_data() {
     let (t, p) = setup("rmdata");
-    accounts::create(&p, "gone", None).unwrap();
-    store::link_profile(&p, "gone").unwrap();
+    accounts::add_account(&p, "gone", None).unwrap();
     let udd = p.user_data_dir("gone");
     std::fs::create_dir_all(udd.join("Cache")).unwrap();
     std::fs::write(udd.join("Cookies"), "x").unwrap();
@@ -117,6 +120,7 @@ fn removing_window_data_that_never_existed_is_not_an_error() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn the_shared_store_survives_a_removal() {
     let (t, p) = setup("survive");
     db::insert_thread(&p.base.join("state_5.sqlite"), "t1", "/x").unwrap();

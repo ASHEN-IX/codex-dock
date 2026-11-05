@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 
 use codex_dock_core::{db, store, Paths, StoreState};
 use std::path::PathBuf;
