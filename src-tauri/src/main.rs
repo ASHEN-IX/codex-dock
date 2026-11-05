@@ -334,9 +334,21 @@ fn cancel_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     if let Some(pid) = pid {
         // SIGTERM, not SIGKILL: the CLI gets to clean up and exit non-zero,
         // which is what triggers the restore in the worker.
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+        // No signal discipline on Windows: no graceful stop is reachable
+        // without a job object, so this is explicitly less good than the Unix
+        // path and the restore worker handles a killed (non-zero-exit) login.
+        #[cfg(not(unix))]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .status();
+        }
     }
     Ok(())
 }

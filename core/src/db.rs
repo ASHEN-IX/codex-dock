@@ -55,8 +55,14 @@ pub fn quick_check(db: &Path) -> Result<bool> {
 }
 
 pub fn inode(path: &Path) -> Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.ino())
+    match crate::platform::fs::file_identity(path) {
+        Some(ino) => Ok(ino),
+        // Never claim files differ when identity cannot be read: treat it as
+        // an unread problem so nothing is displaced on a guess.
+        None => Err(Error::Msg(
+            "file identity is not available on this platform".into(),
+        )),
+    }
 }
 
 const SCHEMA: &str = "create table if not exists projects (id text primary key, name text not null, metadata text not null default '{}', position integer not null, created_at_ms integer not null, updated_at_ms integer not null);

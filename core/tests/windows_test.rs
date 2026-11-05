@@ -9,9 +9,12 @@ fn command_targets_profile_home_and_own_user_data_dir() {
         l.env,
         vec![(
             "CODEX_HOME".to_string(),
-            "/home/u/.codex-profiles/work".to_string()
+            p.profiles.join("work").display().to_string(),
         )]
     );
+    let expected = format!("--user-data-dir={}", p.user_data_dir("work").display());
+    assert!(l.args.join(" ").contains(&expected));
+    #[cfg(target_os = "linux")]
     assert!(l
         .args
         .join(" ")
@@ -27,6 +30,14 @@ fn every_account_gets_a_distinct_user_data_dir() {
 }
 
 #[test]
+#[cfg(not(target_os = "linux"))]
+fn procfs_window_enumeration_is_empty_when_unsupported() {
+    let root = std::env::temp_dir().join(format!("cd-proc-unsupported-{}", std::process::id()));
+    assert!(windows::running(&root).is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn running_maps_user_data_dir_back_to_account() {
     let root = std::env::temp_dir().join(format!("cd-proc-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
@@ -45,6 +56,7 @@ fn running_maps_user_data_dir_back_to_account() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn processes_without_our_flag_are_ignored() {
     let root = std::env::temp_dir().join(format!("cd-proc2-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
@@ -56,6 +68,7 @@ fn processes_without_our_flag_are_ignored() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn ignores_electron_helpers_and_unrelated_apps_and_keeps_space_in_paths() {
     let root = std::env::temp_dir().join(format!("cd-proc-filter-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
@@ -78,6 +91,7 @@ fn ignores_electron_helpers_and_unrelated_apps_and_keeps_space_in_paths() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn legacy_default_process_is_reused_for_the_same_named_account() {
     let root = std::env::temp_dir().join(format!("cd-legacy-{}", std::process::id()));
     let p = Paths::new(root.join(".codex"), root.join(".codex-profiles"));
@@ -97,6 +111,7 @@ fn legacy_default_process_is_reused_for_the_same_named_account() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn rewritten_electron_titles_still_detect_running_accounts_and_ignore_helpers() {
     let root = std::env::temp_dir().join(format!("cd-flat-proc-{}", std::process::id()));
     for (pid, title) in [

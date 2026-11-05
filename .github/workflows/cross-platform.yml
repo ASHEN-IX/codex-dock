@@ -1,0 +1,59 @@
+name: Cross-platform
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cross-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  native:
+    name: Native gate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Gates are compile/test level only. Passing here launches nothing and
+        # claims no runtime support; runtime claims need manual evidence, and
+        # docs/roadmap/cross-platform.md tracks what is still blocked.
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+      - name: Set up Linux build dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-linux
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Test the core without real credentials
+        run: cargo test --locked -p codex-dock-core
+      - name: Lint the complete workspace
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # Native compilation: core library, headless CLI, and Tauri shell behind
+      # the platform adapters, verified separately.
+      - name: Check the core library natively
+        run: cargo check --locked -p codex-dock-core --lib
+      - name: Check the CLI natively
+        run: cargo check --locked -p codex-dock-core --bin codex-dock-cli
+      - name: Check the desktop shell natively
+        run: cargo check --locked -p codex-dock
+  gate:
+    name: Cross-platform gate
+    if: always()
+    needs: [native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every native check to pass
+        env:
+          NATIVE: ${{ needs.native.result }}
+        run: test "$NATIVE" = success

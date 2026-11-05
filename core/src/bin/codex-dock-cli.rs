@@ -1,12 +1,23 @@
 use codex_dock_core::{accounts, store, usage, windows, Paths, StoreState};
 
 fn stamp() -> String {
-    let out = std::process::Command::new("date")
-        .arg("+%Y%m%d-%H%M%S")
-        .output();
-    out.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "backup".to_string())
+    // On Unix `date` has always produced the local-time stamp backups carry;
+    // keep that exact behaviour on the platforms where it works. Elsewhere a
+    // filesystem-safe UTC stamp is honest about being UTC.
+    #[cfg(unix)]
+    {
+        let out = std::process::Command::new("date")
+            .arg("+%Y%m%d-%H%M%S")
+            .output();
+        out.ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "backup".to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        codex_dock_core::platform::fs::utc_stamp().unwrap_or_else(|| "backup".to_string())
+    }
 }
 
 fn now() -> i64 {
@@ -36,7 +47,17 @@ fn cmd_status(p: &Paths) -> i32 {
     let accts = accounts::list(p).unwrap_or_default();
     let signed_in = accts.iter().filter(|a| a.logged_in).count();
     println!("{}", status_counts_line(accts.len(), signed_in));
-    if matches!(r.state, StoreState::Shared) {
+    if let Some(e) = &r.error {
+        println!("unreadable: {e}");
+    }
+    status_exit(matches!(r.state, StoreState::Shared), r.error.as_ref())
+}
+
+/// `Shared` only means healthy when the store's contents were actually read:
+/// an error overrides the state, because a store we could not open must never
+/// exit as if everything were fine.
+fn status_exit(is_shared: bool, error: Option<&String>) -> i32 {
+    if is_shared && error.is_none() {
         0
     } else {
         1
@@ -55,6 +76,12 @@ fn running_line(window: &windows::WindowProc) -> String {
 }
 
 fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
+    if let codex_dock_core::platform::Support::No(reason) =
+        codex_dock_core::platform::capabilities().process_table
+    {
+        eprintln!("no running windows to report: {reason}");
+        return 1;
+    }
     let filter = match account
         .map(|name| accounts::canonical_name(p, name))
         .transpose()
@@ -65,7 +92,9 @@ fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
             return 1;
         }
     };
-    for window in windows::running_for(p, std::path::Path::new("/proc")) {
+    let proc_root = codex_dock_core::platform::process::proc_root()
+        .unwrap_or_else(|| std::path::PathBuf::from("/proc"));
+    for window in windows::running_for(p, &proc_root) {
         if filter.as_ref().is_none_or(|name| *name == window.account) {
             println!("{}", running_line(&window));
         }
@@ -279,6 +308,16 @@ fn main() {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_store_with_an_unread_error_never_exits_as_shared_and_healthy() {
+        let healthy = status_exit(true, None);
+        let corrupt_shape = status_exit(true, Some(&"not a database".to_string()));
+        let not_configured = status_exit(false, None);
+        assert_eq!(healthy, 0);
+        assert_eq!(corrupt_shape, 1, "Shared with an error is not a pass");
+        assert_eq!(not_configured, 1);
+    }
 
     #[test]
     fn routine_status_does_not_disclose_account_metadata() {

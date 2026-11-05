@@ -106,6 +106,20 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Whether a profile name can be safely joined onto a directory without
+/// escaping it. Created profiles already pass [`valid_name`], but names also
+/// arrive from UI input, the CLI and disk listings, so the joins in
+/// `launch`, `remove` and `remove_user_data_dir` re-check. Unicode and spaces
+/// stay valid — only traversal and Windows-only separators are refused.
+pub fn safe_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
+}
+
 pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
     if !valid_name(name) {
         return Err(Error::Msg(format!(
@@ -157,6 +171,9 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 }
 
 pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
+    if !safe_segment(name) {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
     let from = p.profiles.join(name);
     if !from.exists() {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
@@ -243,6 +260,9 @@ pub fn restore_auth(profile: &Path, backup: &Path) -> Result<bool> {
 /// Moved, not deleted, into the same backup so a mis-click is recoverable.
 /// A missing directory is not an error: the account may never have been opened.
 pub fn remove_user_data_dir(p: &Paths, name: &str, backup: &Path) -> Result<()> {
+    if !safe_segment(name) {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
     let dir = p.user_data_dir(name);
     if !dir.exists() {
         return Ok(());

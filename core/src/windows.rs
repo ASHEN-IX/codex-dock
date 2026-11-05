@@ -36,14 +36,29 @@ pub fn user_data_dir(p: &Paths, name: &str) -> PathBuf {
 
 pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     let canonical = accounts::canonical_name(p, name)?;
+    if !accounts::safe_segment(&canonical) {
+        return Err(Error::Msg(format!("invalid account name '{canonical}'")));
+    }
     let name = canonical.as_str();
+    // Without a process table we can neither find an existing window (opening
+    // would duplicate every click) nor wait for the first to appear. Refuse.
+    let reason = match crate::platform::capabilities().process_table {
+        crate::platform::Support::Yes => None,
+        crate::platform::Support::No(r) => Some(r),
+    };
+    if let Some(reason) = reason {
+        return Err(Error::Msg(format!(
+            "opening windows is not supported here: {reason}"
+        )));
+    }
+    let proc_root = crate::platform::process::proc_root().expect("probe capability just checked");
     let _lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(p.profiles.join(name).join(".desktop-launch.lock"))?;
     _lock.lock()?;
-    if let Some(existing) = running_for(p, Path::new("/proc"))
+    if let Some(existing) = running_for(p, &proc_root)
         .into_iter()
         .find(|w| w.account == name)
     {
@@ -67,10 +82,7 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     // Keep the launch lock until the shell wrapper has exec'd Electron, so a
     // concurrent click can discover the process before deciding to launch.
     for _ in 0..50 {
-        if running_for(p, Path::new("/proc"))
-            .iter()
-            .any(|w| w.account == name)
-        {
+        if running_for(p, &proc_root).iter().any(|w| w.account == name) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -83,6 +95,12 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
 }
 
 pub fn running(proc_root: &Path) -> Vec<WindowProc> {
+    // A platform without a process table reports "no windows observed", which
+    // is only ever reached through the capability checks in `launch`/`focus`;
+    // direct callers get the empty list rather than a procfs permission lie.
+    if !crate::platform::process::supported() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let rd = match std::fs::read_dir(proc_root) {
         Ok(r) => r,
@@ -179,7 +197,9 @@ pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
                 }
             }
             if w.user_data_dir.as_os_str().is_empty() {
-                w.user_data_dir = p.home().join(".config/Codex");
+                // Electron's default per-app location for a window we launched
+                // without our flag, anchored at this Paths' home.
+                w.user_data_dir = crate::platform::fs::config_dir_at(p.home()).join("Codex");
             }
             w
         })
@@ -187,9 +207,15 @@ pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
 }
 
 pub fn focus(account: &str) -> bool {
+    if !crate::platform::process::supported() {
+        return false;
+    }
     let p = Paths::real();
     let name = accounts::canonical_name(&p, account).unwrap_or_else(|_| account.to_string());
-    let Some(proc) = running_for(&p, Path::new("/proc"))
+    let Some(proc_root) = crate::platform::process::proc_root() else {
+        return false;
+    };
+    let Some(proc) = running_for(&p, &proc_root)
         .into_iter()
         .find(|w| w.account == name)
     else {

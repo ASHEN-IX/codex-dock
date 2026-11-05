@@ -5,6 +5,7 @@ pub mod error;
 pub mod login;
 pub mod paths;
 pub mod ping;
+pub mod platform;
 pub mod rpc;
 pub mod store;
 pub mod tool;

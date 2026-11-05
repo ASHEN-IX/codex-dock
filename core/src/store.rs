@@ -72,15 +72,15 @@ pub fn inspect(p: &Paths) -> StoreReport {
     }
 
     // Split: a profile has a DB holding threads that is NOT the shared file.
-    // Comparing inodes (not paths) is what makes a profile that is itself a
+    // Comparing identities (not paths) is what makes a profile that is itself a
     // symlink to the base read as shared rather than split.
-    let base_ino = db::inode(&base_db).ok();
+    let base_ino = crate::platform::fs::file_identity(&base_db);
     for name in &accounts {
         let prof_db = p.profiles.join(name).join("state_5.sqlite");
         if !prof_db.exists() {
             continue;
         }
-        if let (Some(b), Ok(pi)) = (base_ino, db::inode(&prof_db)) {
+        if let (Some(b), Some(pi)) = (base_ino, crate::platform::fs::file_identity(&prof_db)) {
             if b == pi {
                 continue;
             }
@@ -115,6 +115,7 @@ pub fn inspect(p: &Paths) -> StoreReport {
 /// to preserve. Missing shared paths are skipped rather than created, which
 /// keeps this a no-op on a machine that has not been set up yet.
 pub fn link_profile(p: &Paths, name: &str) -> Result<()> {
+    crate::platform::fs::require_links("shared-store linking")?;
     let dir = p.profiles.join(name);
     if !dir.is_dir() {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
@@ -128,7 +129,7 @@ pub fn link_profile(p: &Paths, name: &str) -> Result<()> {
         if target.is_symlink() || target.exists() {
             continue;
         }
-        std::os::unix::fs::symlink(&shared, &target)?;
+        crate::platform::fs::create_link(&shared, &target)?;
     }
     sync_projects(p, name)
 }
@@ -189,6 +190,10 @@ fn move_aside(path: &Path, backup: &Path, label: &str) -> Result<()> {
 }
 
 pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
+    // Repair cannot leave a store it moved into an unusable half-linked state
+    // where links are impossible, and it must not merge profile data on the
+    // promise of links it cannot create. Refuse before touching anything.
+    crate::platform::fs::require_links("shared-store repair")?;
     std::fs::create_dir_all(backup)?;
 
     let current = inspect(p);
@@ -273,7 +278,7 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
                 }
                 move_aside(&target, backup, &format!("{name}/old-{item}"))?;
             }
-            std::os::unix::fs::symlink(&shared, &target)?;
+            crate::platform::fs::create_link(&shared, &target)?;
         }
 
         // Sidebars should list the same projects in every window without
@@ -426,13 +431,8 @@ pub fn merge_global_state(base: &Path, target: &Path, backup: &Path) -> Result<(
         std::process::id()
     ));
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let result = (|| -> Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
+        let mut file = crate::platform::fs::create_new_private(&temporary)?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&temporary, target)?;

@@ -13,6 +13,11 @@ use std::{
 const PROMPT: &str = "Reply with exactly pong. Do not use tools.";
 const COOLDOWN: u64 = 60;
 
+/// The `exec` surface pings rely on. Verified against the installed CLI before
+/// anything is sent, so an incompatible Codex version refuses clearly instead
+/// of failing mid-flight after using allowance.
+const PING_EXEC_FLAGS: [&str; 3] = ["--ephemeral", "--ignore-user-config", "--ignore-rules"];
+
 fn command(binary: &Path, profile: &Path, workspace: &Path) -> Command {
     let mut cmd = Command::new(binary);
     cmd.args([
@@ -83,7 +88,6 @@ pub fn send(p: &Paths, name: &str) -> Result<String> {
 }
 
 fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<String> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     // Resolve from the actual account list, never from an unchecked path input.
     let account = accounts::list(p)?
         .into_iter()
@@ -91,15 +95,15 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
         .ok_or_else(|| {
             Error::Msg("Ping requires a signed-in ChatGPT account, not an API-key profile.".into())
         })?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(account.path.join(".dock-ping.lock"))?;
+    let lock = crate::platform::fs::open_private(&account.path.join(".dock-ping.lock"))?;
     lock.try_lock()
         .map_err(|_| Error::Msg("A ping is already running for this account.".into()))?;
     let _lock = PingLock(lock);
+    // Before anything that could use allowance, confirm this CLI really
+    // supports the flag set the ping depends on. The probe prints help text
+    // only; a refusal here never writes the cooldown stamp for a ping that
+    // did not happen.
+    crate::tool::require_exec_support(binary, &PING_EXEC_FLAGS)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -119,9 +123,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
         std::process::id(),
         now.as_nanos()
     )));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&workspace.0)?;
+    crate::platform::fs::create_private_dir(&workspace.0)?;
     // Keep failed attempts in the cooldown too: errors must not cause repeat spending.
     std::fs::write(&stamp, now.as_secs().to_string())?;
     let output = workspace.0.join("reply.txt");
@@ -158,7 +160,7 @@ fn send_with(p: &Paths, name: &str, binary: &Path, timeout: Duration) -> Result<
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
@@ -194,7 +196,7 @@ mod tests {
         let credentials = r#"{"tokens":{"account_id":"fake-account"}}"#;
         std::fs::write(&auth, credentials).unwrap();
         let binary = root.join("fake-codex");
-        std::fs::write(&binary, "#!/bin/sh\n[ \"$CODEX_HOME\" != \"$PWD\" ] || exit 2\n[ ! -f ./auth.json ] || exit 3\nwhile [ $# -gt 0 ]; do\n if [ \"$1\" = --output-last-message ]; then shift; printf pong > \"$1\"; fi\n shift\ndone\nexit 0\n").unwrap();
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --help ] && printf '[--ephemeral] [--ignore-user-config] [--ignore-rules]\\n' && exit 0\n[ \"$CODEX_HOME\" != \"$PWD\" ] || exit 2\n[ ! -f ./auth.json ] || exit 3\nwhile [ $# -gt 0 ]; do\n if [ \"$1\" = --output-last-message ]; then shift; printf pong > \"$1\"; fi\n shift\ndone\nexit 0\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(send_with(&p, "../one", &binary, Duration::from_secs(1)).is_err());
         assert_eq!(
@@ -244,9 +246,21 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let binary = root.join("fake-codex");
         for (name, script, expected) in [
-            ("failure", "#!/bin/sh\nexit 1\n", "Ping failed"),
-            ("timeout", "#!/bin/sh\nexec sleep 5\n", "timed out"),
-            ("empty", "#!/bin/sh\nexit 0\n", "without a reply"),
+            (
+                "failure",
+                "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --help ] && printf '[--ephemeral] [--ignore-user-config] [--ignore-rules]\\n' && exit 0\nexit 1\n",
+                "Ping failed",
+            ),
+            (
+                "timeout",
+                "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --help ] && printf '[--ephemeral] [--ignore-user-config] [--ignore-rules]\\n' && exit 0\nexec sleep 5\n",
+                "timed out",
+            ),
+            (
+                "empty",
+                "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --help ] && printf '[--ephemeral] [--ignore-user-config] [--ignore-rules]\\n' && exit 0\nexit 0\n",
+                "without a reply",
+            ),
         ] {
             accounts::create(&p, name, None).unwrap();
             std::fs::write(
@@ -272,6 +286,58 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not an API-key"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ping_refuses_an_incompatible_cli_before_using_or_recording_anything() {
+        let root = std::env::temp_dir().join(format!("dock-ping-version-{}", std::process::id()));
+        let p = Paths::new(root.join("base"), root.join("profiles"));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("fake-codex");
+        // help responds but lacks --ignore-user-config: an old CLI surface.
+        // --version answers too, so the refusal can name the real version.
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --help ] && printf '[--ephemeral] [--ignore-rules]\\n' && exit 0\necho 'codex-cli 0.100.0'; exit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for name in ["old", "broken", "quiet"] {
+            accounts::create(&p, name, None).unwrap();
+            std::fs::write(
+                p.profiles.join(name).join("auth.json"),
+                format!(r#"{{"tokens":{{"account_id":"{name}"}}}}"#),
+            )
+            .unwrap();
+        }
+        let error = send_with(&p, "old", &binary, Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error.to_string().contains("0.100.0")
+                && error.to_string().contains("--ignore-user-config"),
+            "{error}"
+        );
+        // No stamp: a refused ping is not an attempted spend and must not
+        // start a cooldown for a later, fixed CLI.
+        assert!(!p.profiles.join("old/.dock-last-ping").exists());
+        // A CLI whose probe fails is also refused, never assumed to support.
+        std::fs::write(&binary, "#!/bin/sh\nexit 3\n").unwrap();
+        let error = send_with(&p, "broken", &binary, Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error.to_string().contains("--help") || error.to_string().contains("failed"),
+            "{error}"
+        );
+        assert!(!p.profiles.join("broken/.dock-last-ping").exists());
+        // So is one that cannot even be started.
+        let error = send_with(
+            &p,
+            "quiet",
+            Path::new("/nonexistent/codex"),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("could not query"), "{error}");
+        assert!(!p.profiles.join("quiet/.dock-last-ping").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
