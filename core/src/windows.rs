@@ -55,11 +55,7 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     // 1. Check if a Codex Dock repair is currently active; refuse launch to prevent conflicting writes
     let repair_lock_path = p.base.join(".dock-repair.lock");
     if repair_lock_path.is_file() {
-        if let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&repair_lock_path)
-        {
+        if let Ok(file) = crate::platform::fs::open_private(&repair_lock_path) {
             if file.try_lock().is_err() {
                 return Err(Error::Msg(
                     "cannot launch desktop: Codex Dock repair is currently in progress".to_string(),
@@ -70,16 +66,11 @@ pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
     }
 
     let proc_root = crate::platform::process::proc_root().expect("probe capability just checked");
-    let _lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(p.profiles.join(name).join(".desktop-launch.lock"))?;
-    _lock.try_lock().map_err(|_| {
-        Error::Msg(format!(
-            "cannot launch desktop: profile '{name}' is currently locked by a repair or launch operation"
-        ))
-    })?;
+    let launch_lock_path = p.profiles.join(name).join(".desktop-launch.lock");
+    let _launch_guard = crate::platform::fs::LockGuard::try_acquire(
+        &launch_lock_path,
+        &format!("profile '{name}' launch"),
+    )?;
 
     if let Some(existing) = scan_running_for(p, &proc_root)?
         .into_iter()

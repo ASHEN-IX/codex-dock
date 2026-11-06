@@ -297,7 +297,7 @@ fn main() {
             eprintln!("unknown command '{other}'");
             eprintln!(
                 "commands: status | list | usage | add <name> [clone] | remove <name> | \
-                 login <name> | repair | launch <name> | running [name]"
+                 login <name> | repair (disabled) | launch <name> | running [name]"
             );
             1
         }

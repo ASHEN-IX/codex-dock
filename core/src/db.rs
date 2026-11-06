@@ -23,8 +23,33 @@ fn run(db: &Path, sql: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Execute a strictly read-only query using sqlite3 `-readonly`.
+///
+/// Guaranteed not to write to or create database or WAL files on disk.
+fn run_ro(db: &Path, sql: &str) -> Result<String> {
+    let out = Command::new("sqlite3")
+        .arg("-readonly")
+        .arg(db)
+        .arg(sql)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::Msg("sqlite3 not found in PATH".into())
+            } else {
+                Error::Io(e)
+            }
+        })?;
+    if !out.status.success() {
+        return Err(Error::Msg(format!(
+            "sqlite3 failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 fn scalar(db: &Path, sql: &str) -> Result<usize> {
-    let out = run(db, sql)?;
+    let out = run_ro(db, sql)?;
     out.trim()
         .parse::<usize>()
         .map_err(|_| Error::Msg(format!("unexpected sqlite output: {out:?}")))
@@ -41,7 +66,7 @@ pub fn project_names(db: &Path) -> Result<Vec<String>> {
     if !db.exists() {
         return Ok(Vec::new());
     }
-    let out = run(db, "select name from projects order by position;")?;
+    let out = run_ro(db, "select name from projects order by position;")?;
     Ok(out
         .lines()
         .filter(|l| !l.is_empty())
@@ -50,7 +75,7 @@ pub fn project_names(db: &Path) -> Result<Vec<String>> {
 }
 
 pub fn quick_check(db: &Path) -> Result<bool> {
-    let out = run(db, "PRAGMA quick_check;")?;
+    let out = run_ro(db, "PRAGMA quick_check;")?;
     Ok(out.trim() == "ok")
 }
 

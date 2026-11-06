@@ -128,9 +128,23 @@ fn a_dangling_auth_symlink_reads_as_signed_out_not_as_a_dead_profile() {
     std::fs::remove_dir_all(&t).ok();
 }
 
+struct MutatingRepairScope;
+impl MutatingRepairScope {
+    fn enable() -> Self {
+        store::enable_mutating_repair_for_test(true);
+        Self
+    }
+}
+impl Drop for MutatingRepairScope {
+    fn drop(&mut self) {
+        store::enable_mutating_repair_for_test(false);
+    }
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn repair_displaced_every_file_into_the_backup_for_rollback() {
+    let _scope = MutatingRepairScope::enable();
     // Upgrade/rollback rehearsal: after repair, every displaced original must
     // be inside the backup with its data readable, so a manual restore or a
     // ships-broken upgrade can walk everything back.

@@ -13,9 +13,23 @@ fn tmp(tag: &str) -> PathBuf {
     t
 }
 
+struct MutatingRepairScope;
+impl MutatingRepairScope {
+    fn enable() -> Self {
+        store::enable_mutating_repair_for_test(true);
+        Self
+    }
+}
+impl Drop for MutatingRepairScope {
+    fn drop(&mut self) {
+        store::enable_mutating_repair_for_test(false);
+    }
+}
+
 // Finding 1: a profile dir that IS the base must never displace the shared DB.
 #[test]
 fn repair_never_displaces_the_shared_db_through_a_symlinked_profile() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("symprof");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -41,6 +55,7 @@ fn repair_never_displaces_the_shared_db_through_a_symlinked_profile() {
 // Finding 2: merging a split store must carry the session files into base.
 #[test]
 fn merge_moves_session_files_into_the_base() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("sess");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -78,6 +93,7 @@ fn merge_moves_session_files_into_the_base() {
 // Finding 5: the benign live link must be left exactly as it is.
 #[test]
 fn repair_leaves_a_benign_auth_link_alone() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("benign");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -103,6 +119,7 @@ fn repair_leaves_a_benign_auth_link_alone() {
 // Finding 4: a true cycle must actually be repaired, not just detected.
 #[test]
 fn repair_breaks_a_true_auth_cycle() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("cycle");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -137,6 +154,7 @@ fn repair_breaks_a_true_auth_cycle() {
 // Finding 6: an unreadable profile DB must not be displaced silently.
 #[test]
 fn repair_does_not_displace_an_unreadable_profile_db() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("junk");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -167,6 +185,7 @@ fn repair_does_not_displace_an_unreadable_profile_db() {
 // live Codex window leaves behind.
 #[test]
 fn merge_reads_rows_that_exist_only_in_the_wal() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("wal");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();

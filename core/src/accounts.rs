@@ -220,45 +220,31 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
         canonical_src_opt = Some(canonical_src);
     }
 
-    // Synchronize simultaneous creation attempts using a profile creation lock:
+    // Synchronize simultaneous creation attempts using a persistent profile creation lock:
     let create_lock_path = p.profiles.join(format!(".create-{name}.lock"));
-    let create_lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&create_lock_path)?;
-    create_lock.try_lock().map_err(|_| {
-        Error::Msg(format!(
-            "simultaneous account creation attempt in progress for '{name}'"
-        ))
-    })?;
+    let _create_guard = crate::platform::fs::LockGuard::try_acquire(
+        &create_lock_path,
+        &format!("simultaneous account creation attempt for '{name}'"),
+    )?;
 
     // Re-check target existence after acquiring creation lock:
     if final_path.exists() || final_path.is_symlink() {
-        let _ = create_lock.unlock();
-        let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Msg(format!("account '{name}' already exists")));
     }
 
-    // Stage in a temporary hidden directory:
+    // Stage in a temporary private hidden directory:
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let token = format!("{}-{}-{}", std::process::id(), nonce, name);
     let staging_dir = p.profiles.join(format!(".staging-{name}-{nonce}"));
-    if let Err(e) = std::fs::create_dir_all(&staging_dir) {
-        let _ = create_lock.unlock();
-        let _ = std::fs::remove_file(&create_lock_path);
-        return Err(Error::Io(e));
-    }
+    crate::platform::fs::create_private_dir(&staging_dir)?;
 
     // Write ownership token inside staging directory:
     let token_path = staging_dir.join(".dock-creation-token");
     if let Err(e) = std::fs::write(&token_path, &token) {
         let _ = std::fs::remove_dir_all(&staging_dir);
-        let _ = create_lock.unlock();
-        let _ = std::fs::remove_file(&create_lock_path);
         return Err(Error::Io(e));
     }
 
@@ -276,29 +262,17 @@ pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<
             };
             if let Err(e) = copy_res {
                 let _ = std::fs::remove_dir_all(&staging_dir);
-                let _ = create_lock.unlock();
-                let _ = std::fs::remove_file(&create_lock_path);
                 return Err(e);
             }
         }
     }
 
-    // Atomic move from staging_dir to final_path:
-    if final_path.exists() || final_path.is_symlink() {
+    // Atomic publication from staging_dir to final_path:
+    // Platform-safe atomic no-replace publication that cannot overwrite an existing directory
+    if let Err(e) = crate::platform::fs::atomic_rename_no_replace(&staging_dir, &final_path) {
         let _ = std::fs::remove_dir_all(&staging_dir);
-        let _ = create_lock.unlock();
-        let _ = std::fs::remove_file(&create_lock_path);
-        return Err(Error::Msg(format!("account '{name}' already exists")));
+        return Err(e);
     }
-
-    if let Err(e) = std::fs::rename(&staging_dir, &final_path) {
-        let _ = std::fs::remove_dir_all(&staging_dir);
-        let _ = create_lock.unlock();
-        let _ = std::fs::remove_file(&create_lock_path);
-        return Err(Error::Io(e));
-    }
-    let _ = create_lock.unlock();
-    let _ = std::fs::remove_file(&create_lock_path);
 
     let (account_id, logged_in) = auth_info(&final_path.join("auth.json"));
     Ok((
@@ -374,6 +348,54 @@ pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
     if !from.exists() {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
     }
+
+    // Synchronize with creation: ensure no creation is in progress
+    let create_lock_path = p.profiles.join(format!(".create-{name}.lock"));
+    let _create_guard = crate::platform::fs::LockGuard::try_acquire(
+        &create_lock_path,
+        &format!("cannot remove: account creation for '{name}' is currently in progress"),
+    )?;
+
+    // Synchronize with launch: ensure no launch is in progress
+    let launch_lock_path = from.join(".desktop-launch.lock");
+    let _launch_guard = if launch_lock_path.exists() {
+        Some(crate::platform::fs::LockGuard::try_acquire(
+            &launch_lock_path,
+            &format!("cannot remove: desktop launch for profile '{name}' is currently in progress"),
+        )?)
+    } else {
+        None
+    };
+
+    // Refuse removal if active Codex windows are running for this profile in this environment
+    if let Some(proc_root) = crate::platform::process::proc_root() {
+        let config_root = crate::platform::fs::config_dir_at(p.home());
+        if let Ok(running) = crate::windows::scan_running_for(p, &proc_root) {
+            let active = running.into_iter().any(|w| {
+                if w.account != name {
+                    return false;
+                }
+                if !w.user_data_dir.as_os_str().is_empty()
+                    && w.user_data_dir.starts_with(&config_root)
+                {
+                    return true;
+                }
+                let env = std::fs::read(proc_root.join(w.pid.to_string()).join("environ"))
+                    .unwrap_or_default();
+                env.split(|b| *b == 0)
+                    .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
+                    .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
+                    .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
+                    .unwrap_or(false)
+            });
+            if active {
+                return Err(Error::Msg(format!(
+                    "cannot remove '{name}': active Codex window is running for this account; close it first"
+                )));
+            }
+        }
+    }
+
     std::fs::create_dir_all(backup)?;
     let to = backup.join(name);
     std::fs::rename(&from, &to)?;

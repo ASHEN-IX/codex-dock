@@ -4,6 +4,7 @@ use std::fmt;
 pub enum Error {
     Io(std::io::Error),
     Msg(String),
+    MaintenanceUnavailable(String),
 }
 
 impl fmt::Display for Error {
@@ -11,6 +12,7 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "{e}"),
             Error::Msg(m) => write!(f, "{m}"),
+            Error::MaintenanceUnavailable(m) => write!(f, "maintenance unavailable: {m}"),
         }
     }
 }

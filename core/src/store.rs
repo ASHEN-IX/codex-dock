@@ -369,22 +369,28 @@ fn check_proc_file_handles_and_locks(proc_root: &Path, target_paths: &[PathBuf])
     Ok(())
 }
 
+thread_local! {
+    static MUTATING_REPAIR_THREAD_COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Internal helper to enable mutating repair for regression tests or offline maintenance.
+#[doc(hidden)]
+pub fn enable_mutating_repair_for_test(enabled: bool) {
+    MUTATING_REPAIR_THREAD_COUNTER.with(|c| {
+        if enabled {
+            c.set(c.get() + 1);
+        } else {
+            c.set(c.get().saturating_sub(1));
+        }
+    });
+}
+
 pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     repair_with_proc_root(p, backup, crate::platform::process::proc_root().as_deref())
 }
 
 struct RepairLocks {
-    locks: Vec<std::fs::File>,
-    repair_lock_path: PathBuf,
-}
-
-impl Drop for RepairLocks {
-    fn drop(&mut self) {
-        for f in &self.locks {
-            let _ = f.unlock();
-        }
-        let _ = std::fs::remove_file(&self.repair_lock_path);
-    }
+    locks: Vec<crate::platform::fs::LockGuard>,
 }
 
 pub fn repair_with_proc_root(
@@ -392,6 +398,19 @@ pub fn repair_with_proc_root(
     backup: &Path,
     proc_root: Option<&Path>,
 ) -> Result<StoreReport> {
+    // Architectural decision (Phase 1.1 Final Stabilization):
+    // Mutating shared-store repair is disabled by default for normal users to prevent
+    // active-writer hazards and data corruption. Read-only diagnostics ('store::inspect')
+    // remain fully available.
+    let allowed = MUTATING_REPAIR_THREAD_COUNTER.with(|c| c.get() > 0)
+        || std::env::var("CODEX_DOCK_ENABLE_MUTATING_REPAIR").as_deref() == Ok("1");
+
+    if !allowed {
+        return Err(Error::MaintenanceUnavailable(
+            "mutating shared-store repair is disabled in this milestone to protect database integrity against concurrent writers. Use 'store status' for read-only diagnostics.".to_string(),
+        ));
+    }
+
     // 1. Refuse before touching anything if shared store is not validated
     crate::platform::fs::require_shared_store("shared-store repair")?;
     crate::platform::fs::require_links("shared-store repair")?;
@@ -437,41 +456,19 @@ pub fn repair_with_proc_root(
 
     // 4. Synchronize Dock operations: acquire and hold global repair lock and all profile launch locks
     let repair_lock_path = p.base.join(".dock-repair.lock");
-    let repair_lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&repair_lock_path)
-        .map_err(|e| {
-            Error::Msg(format!(
-                "cannot open repair lock file '{}': {e}",
-                repair_lock_path.display()
-            ))
-        })?;
-    repair_lock.try_lock().map_err(|_| {
-        Error::Msg(
-            "cannot repair: another Codex Dock repair operation is currently running".to_string(),
-        )
-    })?;
+    let repair_guard = crate::platform::fs::LockGuard::try_acquire(
+        &repair_lock_path,
+        "another Codex Dock repair operation",
+    )?;
 
     let mut held_locks = RepairLocks {
-        locks: vec![repair_lock],
-        repair_lock_path: repair_lock_path.clone(),
+        locks: vec![repair_guard],
     };
 
     let base_launch_lock = p.base.join(".desktop-launch.lock");
-    if let Ok(f) = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&base_launch_lock)
-    {
-        f.try_lock().map_err(|_| {
-            Error::Msg("cannot repair: base profile launch is currently in progress".to_string())
-        })?;
-        held_locks.locks.push(f);
-    }
+    let base_guard =
+        crate::platform::fs::LockGuard::try_acquire(&base_launch_lock, "base profile launch")?;
+    held_locks.locks.push(base_guard);
 
     let mut profile_dirs = Vec::new();
     let base_canonical = std::fs::canonicalize(&p.base).ok();
@@ -483,20 +480,11 @@ pub fn repair_with_proc_root(
                 let is_base = base_canonical.is_some() && base_canonical == prof_canonical;
                 if !is_base {
                     let prof_launch_lock = e.path().join(".desktop-launch.lock");
-                    let f = std::fs::OpenOptions::new()
-                        .create(true)
-                        .truncate(false)
-                        .write(true)
-                        .open(&prof_launch_lock)
-                        .map_err(|e| {
-                            Error::Msg(format!("cannot open launch lock for profile '{name}': {e}"))
-                        })?;
-                    f.try_lock().map_err(|_| {
-                        Error::Msg(format!(
-                            "cannot repair: desktop launch is currently in progress for profile '{name}'"
-                        ))
-                    })?;
-                    held_locks.locks.push(f);
+                    let prof_guard = crate::platform::fs::LockGuard::try_acquire(
+                        &prof_launch_lock,
+                        &format!("desktop launch for profile '{name}'"),
+                    )?;
+                    held_locks.locks.push(prof_guard);
                 }
                 profile_dirs.push((name, e.path()));
             }

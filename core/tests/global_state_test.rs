@@ -91,7 +91,7 @@ fn repair_syncs_projects_but_keeps_each_windows_account() {
     std::fs::write(p.profiles.join("work/.codex-global-state.json"),
         r#"{"local-projects":{},"electron-persisted-atom-state":{"local-document-identity":{"accountId":"MINE"}}}"#).unwrap();
 
-    store::repair(&p, &p.backup_dir("s")).unwrap();
+    store::sync_projects(&p, "work").unwrap();
 
     let out: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(p.profiles.join("work/.codex-global-state.json")).unwrap(),

@@ -175,13 +175,14 @@ restates the Phase 1 audit so T1 has a checklist to verify per OS.
 
 ## 6. Staged plan, acceptance criteria
 
-### T0 — Phase 1 & Phase 1.1 (this repo state)
+### T0 — Phase 1 & Phase 1.1 Final Stabilization (this repo state)
 Adapters + capability gates + Linux-parity tests + three-OS CI gates + platform safety corrections:
-- Account creation atomicity: transactional preflight, rollback on failure, preservation of pre-existing directories.
-- Refactored capability model separating filesystem symlinks from validated shared-store compatibility, process discovery, window activation, and safe desktop launch.
-- Fail-closed repair protection: refuses when active Codex windows or database file locks are detected, or when reliable writer detection is unavailable.
-- Isolation-only runtime behavior for macOS and Windows.
-- Acceptance: all core tests pass on Linux; native gates (fmt/test/clippy/check) pass on ubuntu/macos/windows runners; no user data touched anywhere.
+- **Persistent advisory synchronization locks:** `LockGuard` RAII guards prevent inode-replacement races; lock files (`.create-{name}.lock`, `.dock-repair.lock`, `.desktop-launch.lock`) remain persistent across releases.
+- **Native atomic no-replace publication:** `atomic_rename_no_replace` uses `renameat2(RENAME_NOREPLACE)` on Linux and `renameatx_np(RENAME_EXCL)` on macOS, preventing TOCTOU races and pre-existing directory clobbering.
+- **Disabled mutating shared-store repair:** Mutating repair is disabled across CLI, GUI, and public APIs (`Error::MaintenanceUnavailable`) to prevent active-writer hazards; read-only diagnostics (`store::inspect`, `db::quick_check`) use `sqlite3 -readonly` and guarantee byte preservation.
+- **Account lifecycle data integrity:** Account creation enforces path containment and rollback safety; `accounts::remove` synchronizes with creation and launch locks, verifies no running windows, and moves profiles and user data to dated backup directories rather than deleting.
+- **Isolation-only runtime behavior for macOS and Windows:** Unvalidated platforms remain in isolation-only mode without executing unverified shared-store operations.
+- Acceptance: 149 core tests pass on Linux; native gates (fmt/test/clippy/check) pass on ubuntu/macos/windows runners; no user data touched anywhere.
 
 ### T1 — Verify desktop store parity & storage compatibility on Windows/macOS (manual, capability-gated)
 Prerequisites:
@@ -294,7 +295,7 @@ baseline, verified checksums workflow, draft-only releases.
 
 ```bash
 cargo fmt --all -- --check
-cargo test --locked -p codex-dock-core              # 132 tests, Linux PASS
+cargo test --locked -p codex-dock-core              # 149 tests, Linux PASS
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo build --locked --release --workspace          # Linux PASS
 python3 scripts/check-ui.py

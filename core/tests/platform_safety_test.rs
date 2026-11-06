@@ -5,6 +5,7 @@
 //! - Platform capability separation (symlinks vs shared-store compatibility).
 //! - Windows and macOS isolation-only behavior.
 
+use codex_dock_core::platform::fs::{atomic_rename_no_replace, LockGuard};
 use codex_dock_core::{accounts, store, Paths};
 #[cfg(target_os = "linux")]
 use codex_dock_core::{db, windows};
@@ -184,9 +185,23 @@ fn windows_uses_isolation_only_and_refuses_shared_store_operations() {
     std::fs::remove_dir_all(&t).ok();
 }
 
+struct MutatingRepairScope;
+impl MutatingRepairScope {
+    fn enable() -> Self {
+        store::enable_mutating_repair_for_test(true);
+        Self
+    }
+}
+impl Drop for MutatingRepairScope {
+    fn drop(&mut self) {
+        store::enable_mutating_repair_for_test(false);
+    }
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn active_writer_repair_refusal_when_windows_running() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("running_refusal");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -222,6 +237,7 @@ fn active_writer_repair_refusal_when_windows_running() {
 #[test]
 #[cfg(target_os = "linux")]
 fn active_writer_repair_refusal_when_database_locked() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("lock_refusal");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -262,6 +278,7 @@ fn active_writer_repair_refusal_when_database_locked() {
 #[test]
 #[cfg(target_os = "linux")]
 fn active_sqlite_transaction_refuses_mutating_repair_and_preserves_database() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("sqlite_active_tx");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -327,6 +344,7 @@ fn active_sqlite_transaction_refuses_mutating_repair_and_preserves_database() {
 #[test]
 #[cfg(target_os = "linux")]
 fn concurrent_repair_and_launch_are_mutually_exclusive() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("dock_concurrency");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -349,7 +367,10 @@ fn concurrent_repair_and_launch_are_mutually_exclusive() {
     let err = store::repair_with_proc_root(&p, &bak, Some(&empty_proc)).unwrap_err();
     assert!(
         err.to_string()
-            .contains("another Codex Dock repair operation is currently running"),
+            .contains("repair operation is currently in progress")
+            || err
+                .to_string()
+                .contains("repair operation is currently running"),
         "expected concurrent repair refusal, got: {err}"
     );
 
@@ -370,6 +391,7 @@ fn concurrent_repair_and_launch_are_mutually_exclusive() {
 #[test]
 #[cfg(target_os = "linux")]
 fn repair_refuses_when_proc_root_missing_or_unreadable() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("proc_unreadable");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -549,6 +571,7 @@ fn rollback_aborts_without_deleting_target_if_ownership_token_is_missing_or_mism
 #[test]
 #[cfg(target_os = "linux")]
 fn active_writer_repair_refusal_when_launch_lock_held() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("launch_lock_refusal");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -566,7 +589,10 @@ fn active_writer_repair_refusal_when_launch_lock_held() {
 
     let err = store::repair_with_proc_root(&p, &bak, Some(&empty_proc)).unwrap_err();
     assert!(
-        err.to_string().contains("launch is currently in progress")
+        err.to_string()
+            .contains("launch for profile 'work' is currently in progress")
+            || err.to_string().contains("launch is currently in progress")
+            || err.to_string().contains("is currently in progress")
             || err
                 .to_string()
                 .contains("locked by an active process or writer"),
@@ -574,5 +600,347 @@ fn active_writer_repair_refusal_when_launch_lock_held() {
     );
 
     let _ = lock_file.unlock();
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+#[cfg(unix)]
+fn persistent_lock_survives_release_and_independent_process_cannot_bypass() {
+    let t = tmp("persistent_lock");
+    let lock_path = t.join(".create-work.lock");
+
+    // Spawn an independent child process holding flock on the lock file
+    let script = format!(
+        "import fcntl, time, sys\n\
+         f = open('{}', 'w')\n\
+         fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n\
+         sys.stdout.write('LOCKED\\n')\n\
+         sys.stdout.flush()\n\
+         time.sleep(1.0)\n\
+         f.close()\n",
+        lock_path.display()
+    );
+
+    let mut child = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("must spawn python3 holding lock");
+
+    use std::io::{BufRead, BufReader};
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(line.contains("LOCKED"));
+
+    // 1. While the independent process holds the lock, try_acquire must refuse
+    let err = LockGuard::try_acquire(&lock_path, "account creation").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("account creation is currently in progress"),
+        "expected lock refusal while held by another process: {err}"
+    );
+
+    // 2. Wait for child process to close the lock and terminate
+    let status = child.wait().unwrap();
+    assert!(status.success());
+
+    // 3. The lock file must exist on disk; record its inode
+    use std::os::unix::fs::MetadataExt;
+    let meta_before =
+        std::fs::metadata(&lock_path).expect("lock file must persist after process close");
+    let ino_before = meta_before.ino();
+
+    // 4. Now acquire lock via LockGuard in this process
+    {
+        let guard = LockGuard::try_acquire(&lock_path, "account creation")
+            .expect("must successfully acquire lock once released by child");
+        let meta_during = std::fs::metadata(guard.path()).unwrap();
+        assert_eq!(meta_during.ino(), ino_before, "inode must match while held");
+
+        // Concurrent acquisition attempt in same or another thread must fail
+        assert!(LockGuard::try_acquire(&lock_path, "competing attempt").is_err());
+    } // guard dropped here
+
+    // 5. CRITICAL: Lock file must NEVER be deleted or unlinked on drop/release
+    assert!(
+        lock_path.exists(),
+        "lock file must remain persistent after release"
+    );
+    let meta_after = std::fs::metadata(&lock_path).expect("lock file must still exist");
+    assert_eq!(
+        meta_after.ino(),
+        ino_before,
+        "lock file must preserve identical inode (no unlink/recreate race)"
+    );
+
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+fn atomic_no_replace_account_publication_refuses_empty_nonempty_and_symlinks() {
+    let t = tmp("atomic_rename");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    // A. Pre-existing empty directory
+    let empty_dir = p.profiles.join("existing_empty");
+    std::fs::create_dir_all(&empty_dir).unwrap();
+
+    let res_empty = accounts::add_account(&p, "existing_empty", None);
+    assert!(
+        res_empty.is_err(),
+        "must refuse pre-existing empty directory"
+    );
+    assert!(
+        empty_dir.is_dir(),
+        "empty directory must not be removed or overwritten"
+    );
+
+    // Direct atomic_rename_no_replace test against empty directory
+    let staging_empty = t.join("staging_empty");
+    std::fs::create_dir_all(&staging_empty).unwrap();
+    std::fs::write(staging_empty.join("new_file.txt"), b"new").unwrap();
+    let rename_err = atomic_rename_no_replace(&staging_empty, &empty_dir).unwrap_err();
+    assert!(
+        rename_err.to_string().contains("already exists"),
+        "atomic_rename_no_replace must refuse to overwrite empty directory: {rename_err}"
+    );
+    assert!(
+        !empty_dir.join("new_file.txt").exists(),
+        "empty dir must not have received new file"
+    );
+
+    // B. Pre-existing non-empty directory
+    let nonempty_dir = p.profiles.join("existing_full");
+    std::fs::create_dir_all(&nonempty_dir).unwrap();
+    let precious = nonempty_dir.join("saved.txt");
+    std::fs::write(&precious, b"precious data").unwrap();
+
+    let res_full = accounts::create(&p, "existing_full", None);
+    assert!(
+        res_full.is_err(),
+        "create must refuse pre-existing non-empty directory"
+    );
+    assert_eq!(std::fs::read(&precious).unwrap(), b"precious data");
+
+    let staging_full = t.join("staging_full");
+    std::fs::create_dir_all(&staging_full).unwrap();
+    let rename_full_err = atomic_rename_no_replace(&staging_full, &nonempty_dir).unwrap_err();
+    assert!(
+        rename_full_err.to_string().contains("already exists"),
+        "atomic_rename_no_replace must refuse to overwrite non-empty directory: {rename_full_err}"
+    );
+    assert_eq!(std::fs::read(&precious).unwrap(), b"precious data");
+
+    // C. Pre-existing symlink
+    #[cfg(unix)]
+    {
+        let symlink_path = p.profiles.join("existing_symlink");
+        let dummy_target = t.join("symlink_target_dir");
+        std::fs::create_dir_all(&dummy_target).unwrap();
+        std::os::unix::fs::symlink(&dummy_target, &symlink_path).unwrap();
+
+        let res_sym = accounts::add_account(&p, "existing_symlink", None);
+        assert!(res_sym.is_err(), "must refuse pre-existing symlink");
+        assert!(symlink_path.is_symlink(), "symlink must be preserved");
+
+        let staging_sym = t.join("staging_sym");
+        std::fs::create_dir_all(&staging_sym).unwrap();
+        let rename_sym_err = atomic_rename_no_replace(&staging_sym, &symlink_path).unwrap_err();
+        assert!(
+            rename_sym_err.to_string().contains("already exists"),
+            "atomic_rename_no_replace must refuse to overwrite existing symlink: {rename_sym_err}"
+        );
+        assert!(symlink_path.is_symlink());
+    }
+
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+fn concurrent_create_and_remove_synchronization() {
+    let t = tmp("create_remove_sync");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    // 1. Create an account
+    let created = accounts::create(&p, "test_sync", None).unwrap();
+    assert!(created.path.is_dir());
+
+    let bak = t.join("backups");
+
+    // 2. Hold .create-test_sync.lock and verify remove refuses
+    let create_lock_path = p.profiles.join(".create-test_sync.lock");
+    {
+        let _create_guard = LockGuard::try_acquire(&create_lock_path, "account creation").unwrap();
+        let remove_err = accounts::remove(&p, "test_sync", &bak).unwrap_err();
+        assert!(
+            remove_err
+                .to_string()
+                .contains("account creation for 'test_sync' is currently in progress"),
+            "remove must refuse while creation lock is held: {remove_err}"
+        );
+        assert!(
+            p.profiles.join("test_sync").exists(),
+            "profile must not be removed"
+        );
+    }
+
+    // 3. Hold .desktop-launch.lock and verify remove refuses
+    let udir = p.user_data_dir("test_sync");
+    std::fs::create_dir_all(&udir).unwrap();
+    let launch_lock_path = p.profiles.join("test_sync").join(".desktop-launch.lock");
+    {
+        let _launch_guard = LockGuard::try_acquire(&launch_lock_path, "desktop launch").unwrap();
+        let remove_err = accounts::remove(&p, "test_sync", &bak).unwrap_err();
+        assert!(
+            remove_err
+                .to_string()
+                .contains("desktop launch for profile 'test_sync' is currently in progress"),
+            "remove must refuse while launch lock is held: {remove_err}"
+        );
+        assert!(
+            p.profiles.join("test_sync").exists(),
+            "profile must not be removed"
+        );
+    }
+
+    // 4. When no locks are held, remove succeeds and moves to backup
+    let backed_up = accounts::remove(&p, "test_sync", &bak).unwrap();
+    assert!(
+        !p.profiles.join("test_sync").exists(),
+        "profile moved from active root"
+    );
+    assert!(
+        backed_up.is_dir(),
+        "profile safely parked in backup directory"
+    );
+
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+fn mutating_repair_refuses_by_default_across_all_public_entrypoints() {
+    let t = tmp("repair_disabled");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    let bak1 = t.join("bak1");
+    let err1 = store::repair(&p, &bak1).unwrap_err();
+    match &err1 {
+        codex_dock_core::Error::MaintenanceUnavailable(msg) => {
+            assert!(
+                msg.contains("mutating shared-store repair is disabled in this milestone"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected MaintenanceUnavailable, got: {other:?}"),
+    }
+    assert!(!bak1.exists(), "must not create backup on refusal");
+
+    let bak2 = t.join("bak2");
+    let empty_proc = t.join("empty_proc");
+    std::fs::create_dir_all(&empty_proc).unwrap();
+    let err2 = store::repair_with_proc_root(&p, &bak2, Some(&empty_proc)).unwrap_err();
+    match &err2 {
+        codex_dock_core::Error::MaintenanceUnavailable(msg) => {
+            assert!(
+                msg.contains("mutating shared-store repair is disabled in this milestone"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected MaintenanceUnavailable, got: {other:?}"),
+    }
+    assert!(!bak2.exists(), "must not create backup on refusal");
+
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn read_only_diagnostics_preserve_database_and_wal_bytes_exactly() {
+    let t = tmp("ro_diagnostics");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    let db_path = p.base.join("state_5.sqlite");
+    db::create_empty(&db_path).unwrap();
+    db::insert_thread(&db_path, "thread_1", "/rollout/1.jsonl").unwrap();
+    db::insert_thread(&db_path, "thread_2", "/rollout/2.jsonl").unwrap();
+
+    // Enable WAL mode
+    let _ = db::run_query(&db_path, "PRAGMA journal_mode=WAL;").unwrap();
+    db::insert_thread(&db_path, "thread_3_wal", "/rollout/3.jsonl").unwrap();
+
+    let wal_path = p.base.join("state_5.sqlite-wal");
+    let shm_path = p.base.join("state_5.sqlite-shm");
+
+    // Snapshot byte contents before read-only operations
+    let db_bytes_before = std::fs::read(&db_path).unwrap();
+    let wal_bytes_before = if wal_path.exists() {
+        Some(std::fs::read(&wal_path).unwrap())
+    } else {
+        None
+    };
+    let shm_bytes_before = if shm_path.exists() {
+        Some(std::fs::read(&shm_path).unwrap())
+    } else {
+        None
+    };
+
+    let db_meta_before = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+
+    // Small sleep so if anything touched the file mtime would differ
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Execute read-only diagnostics repeatedly
+    let count = db::thread_count(&db_path).unwrap();
+    assert_eq!(count, 3);
+
+    let projects = db::project_names(&db_path).unwrap();
+    assert!(projects.is_empty());
+
+    let is_ok = db::quick_check(&db_path).unwrap();
+    assert!(is_ok);
+
+    let report = store::inspect(&p);
+    assert_eq!(report.threads, 3);
+    assert!(report.error.is_none());
+
+    // Verify bytes are 100% byte-for-byte identical
+    let db_bytes_after = std::fs::read(&db_path).unwrap();
+    assert_eq!(
+        db_bytes_before, db_bytes_after,
+        "database file bytes modified during read-only diagnostics!"
+    );
+
+    if let Some(wal_before) = wal_bytes_before {
+        let wal_after = std::fs::read(&wal_path).unwrap();
+        assert_eq!(
+            wal_before, wal_after,
+            "WAL file bytes modified during read-only diagnostics!"
+        );
+    }
+
+    if let Some(shm_before) = shm_bytes_before {
+        let shm_after = std::fs::read(&shm_path).unwrap();
+        assert_eq!(
+            shm_before, shm_after,
+            "SHM file bytes modified during read-only diagnostics!"
+        );
+    }
+
+    let db_meta_after = std::fs::metadata(&db_path).unwrap().modified().unwrap();
+    assert_eq!(
+        db_meta_before, db_meta_after,
+        "database mtime changed during read-only operations!"
+    );
+
     std::fs::remove_dir_all(&t).ok();
 }

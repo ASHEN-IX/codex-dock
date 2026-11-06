@@ -177,13 +177,197 @@ pub fn create_new_private(path: &Path) -> Result<std::fs::File> {
 /// Open an existing-or-new file without truncating, for lock files.
 pub fn open_private(path: &Path) -> Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(false).write(true);
+    options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     Ok(options.open(path)?)
+}
+
+/// An RAII guard managing the lifetime of an advisory file lock.
+///
+/// Synchronization protocol:
+/// - Lock files are persistent on disk and opened private (mode 0600 on Unix).
+/// - Locks are acquired non-blockingly using `File::try_lock()`.
+/// - Dropping the guard releases the kernel lock via `File::unlock()`.
+/// - Lock files are NEVER unlinked or removed during normal release, preventing
+///   inode-replacement races between independent processes.
+#[derive(Debug)]
+pub struct LockGuard {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    label: String,
+}
+
+impl LockGuard {
+    pub fn try_acquire(path: &Path, label: &str) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = open_private(path).map_err(|e| {
+            crate::error::Error::Msg(format!(
+                "cannot open {label} lock file '{}': {e}",
+                path.display()
+            ))
+        })?;
+        file.try_lock()
+            .map_err(|_| crate::error::Error::Msg(format!("{label} is currently in progress")))?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            label: label.to_string(),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn file(&self) -> &std::fs::File {
+        &self.file
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+        // NEVER remove the lock file: it must remain persistent on disk
+        // to prevent inode-replacement races.
+    }
+}
+
+/// Atomically publish/rename `from` to `to`, guaranteeing that `to` is not replaced
+/// if it already exists (even if `to` is an empty directory).
+pub fn atomic_rename_no_replace(from: &Path, to: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_from = CString::new(from.as_os_str().as_bytes()).map_err(|e| {
+            crate::error::Error::Msg(format!("invalid path '{}': {e}", from.display()))
+        })?;
+        let c_to = CString::new(to.as_os_str().as_bytes()).map_err(|e| {
+            crate::error::Error::Msg(format!("invalid path '{}': {e}", to.display()))
+        })?;
+
+        const AT_FDCWD: std::ffi::c_int = -100;
+        const RENAME_NOREPLACE: std::ffi::c_uint = 1;
+
+        extern "C" {
+            fn renameat2(
+                olddirfd: std::ffi::c_int,
+                oldpath: *const std::ffi::c_char,
+                newdirfd: std::ffi::c_int,
+                newpath: *const std::ffi::c_char,
+                flags: std::ffi::c_uint,
+            ) -> std::ffi::c_int;
+        }
+
+        let ret = unsafe {
+            renameat2(
+                AT_FDCWD,
+                c_from.as_ptr(),
+                AT_FDCWD,
+                c_to.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        };
+
+        if ret == 0 {
+            return Ok(());
+        }
+
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(17) || err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Err(crate::error::Error::Msg(format!(
+                "destination '{}' already exists",
+                to.display()
+            )));
+        }
+        Err(crate::error::Error::Io(err))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_from = CString::new(from.as_os_str().as_bytes()).map_err(|e| {
+            crate::error::Error::Msg(format!("invalid path '{}': {e}", from.display()))
+        })?;
+        let c_to = CString::new(to.as_os_str().as_bytes()).map_err(|e| {
+            crate::error::Error::Msg(format!("invalid path '{}': {e}", to.display()))
+        })?;
+
+        const AT_FDCWD: std::ffi::c_int = -2;
+        const RENAME_EXCL: std::ffi::c_uint = 0x00000004;
+
+        extern "C" {
+            fn renameatx_np(
+                olddirfd: std::ffi::c_int,
+                oldpath: *const std::ffi::c_char,
+                newdirfd: std::ffi::c_int,
+                newpath: *const std::ffi::c_char,
+                flags: std::ffi::c_uint,
+            ) -> std::ffi::c_int;
+        }
+
+        let ret = unsafe {
+            renameatx_np(
+                AT_FDCWD,
+                c_from.as_ptr(),
+                AT_FDCWD,
+                c_to.as_ptr(),
+                RENAME_EXCL,
+            )
+        };
+
+        if ret == 0 {
+            return Ok(());
+        }
+
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(17) || err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Err(crate::error::Error::Msg(format!(
+                "destination '{}' already exists",
+                to.display()
+            )));
+        }
+        Err(crate::error::Error::Io(err))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if to.exists() || std::fs::symlink_metadata(to).is_ok() {
+            return Err(crate::error::Error::Msg(format!(
+                "destination '{}' already exists",
+                to.display()
+            )));
+        }
+        // std::fs::rename on Windows does not replace existing directories
+        match std::fs::rename(from, to) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(
+                crate::error::Error::Msg(format!("destination '{}' already exists", to.display())),
+            ),
+            Err(e) => Err(crate::error::Error::Io(e)),
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (from, to);
+        Err(crate::error::Error::Msg(
+            "atomic no-replace publication is not supported on this platform".into(),
+        ))
+    }
 }
 
 /// A filesystem-safe `YYYYMMDD-HHMMSS` stamp in UTC, for the rare platform
