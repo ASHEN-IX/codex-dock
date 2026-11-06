@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 
 use codex_dock_core::{accounts, db, store, Paths, StoreState};
 use std::path::PathBuf;
@@ -10,8 +10,22 @@ fn tmp(tag: &str) -> PathBuf {
     t
 }
 
+struct MutatingRepairScope;
+impl MutatingRepairScope {
+    fn enable() -> Self {
+        store::enable_mutating_repair_for_test(true);
+        Self
+    }
+}
+impl Drop for MutatingRepairScope {
+    fn drop(&mut self) {
+        store::enable_mutating_repair_for_test(false);
+    }
+}
+
 #[test]
 fn repair_breaks_auth_cycle_and_links_store() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("rep");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -51,6 +65,7 @@ fn repair_breaks_auth_cycle_and_links_store() {
 
 #[test]
 fn repair_is_idempotent() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("idem");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -69,6 +84,7 @@ fn repair_is_idempotent() {
 
 #[test]
 fn repair_merges_split_store_and_preserves_original() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("merge");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -96,6 +112,7 @@ fn repair_merges_split_store_and_preserves_original() {
 
 #[test]
 fn repair_refuses_when_profiles_dir_is_nested() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("nested");
     let p = Paths::new(t.join(".codex"), t.join(".codex"));
     std::fs::create_dir_all(p.profiles.join("work")).unwrap();
@@ -106,6 +123,7 @@ fn repair_refuses_when_profiles_dir_is_nested() {
 
 #[test]
 fn repair_repoints_rollout_paths_into_base() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("repoint");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();
@@ -136,6 +154,7 @@ fn repair_repoints_rollout_paths_into_base() {
 
 #[test]
 fn repair_keeps_own_auth_per_profile() {
+    let _scope = MutatingRepairScope::enable();
     let t = tmp("auth");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     std::fs::create_dir_all(&p.base).unwrap();

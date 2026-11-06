@@ -103,7 +103,7 @@ make cli
 | `usage` | Per-account plan, 5-hour %, weekly %, credits |
 | `launch <name>` | Open Codex Desktop for one account |
 | `running [name]` | PIDs of open windows, optionally filtered by a local profile name |
-| `repair` | Verify and repair the shared store, writing a backup |
+| `repair` | Verify and repair the shared store, writing a backup (disabled in Phase 1.1; use `status` for read-only diagnostics) |
 
 `status` against a healthy store writes nothing.
 
@@ -146,9 +146,11 @@ account the window is on) is preserved.
 Every mutation is move-then-link. Nothing is deleted; displaced files go to
 `~/codex-dock-backup-<timestamp>/`.
 
-Repair verifies by **inode** through every profile path and runs
-`PRAGMA quick_check`. The UI only shows a checkmark when that verification
-passed.
+Mutating shared-store repair is disabled in Phase 1.1 to protect against concurrent-writer
+hazards and WAL coordination races while Codex windows may be open or background tasks running.
+Read-only diagnostics (`status` / `store::inspect` / `db::quick_check`) run in strict `-readonly`
+mode without mutating database or WAL bytes. Repair verifies by **inode** through every profile
+path and runs `PRAGMA quick_check`. The UI only shows a checkmark when that verification passed.
 
 ## Usage
 
@@ -200,7 +202,7 @@ rather than your real `~/.codex`.
 make test     # cargo test -p codex-dock-core
 ```
 
-132 tests. The ones worth knowing about reproduce real traps: auth cycles,
+149 tests. The ones worth knowing about reproduce real traps: auth cycles,
 nested profiles, split stores, repair idempotency, `rollout_path` repointing,
 absent usage fields staying `None`, stale readings never becoming zero, path
 traversal and Unicode/space names, and per-platform capability reporting

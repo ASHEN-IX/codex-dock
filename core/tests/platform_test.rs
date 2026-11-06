@@ -22,17 +22,21 @@ fn the_capability_report_matches_the_platform_it_runs_on() {
     let caps = platform::capabilities();
     #[cfg(target_os = "linux")]
     {
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert_eq!(caps.process_table, Support::Yes);
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert_eq!(caps.shared_store_compatibility, Support::Yes);
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert_eq!(caps.window_activation, Support::Yes);
+        assert_eq!(caps.safe_desktop_launch, Support::Yes);
     }
     #[cfg(target_os = "macos")]
     {
-        // Links are real, process and window features are reported absent
-        // with a reason rather than pretending.
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert!(matches!(caps.process_table, Support::No(r) if r.contains("/proc")));
+        // Links are real, but shared store is unverified, and process/window features
+        // are reported absent with a reason rather than pretending.
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
+        assert!(matches!(caps.native_process_discovery, Support::No(r) if r.contains("/proc")));
         assert!(matches!(caps.window_activation, Support::No(_)));
+        assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
 }
 
@@ -77,15 +81,18 @@ fn unicode_and_space_account_names_are_managed_like_any_other() {
     assert_eq!(listed[0].name, "工作 语料");
     assert!(listed[0].logged_in);
 
-    // Linking through the adapter keeps the previous storing contract.
-    store::link_profile(&p, "工作 语料").unwrap();
-    let shared = p.profiles.join("工作 语料/state_5.sqlite");
-    assert!(shared.is_symlink(), "the shared store must be linked");
-    assert_eq!(
-        platform::fs::file_identity(&shared),
-        platform::fs::file_identity(&p.base.join("state_5.sqlite")),
-        "and it must resolve to the base database"
-    );
+    #[cfg(target_os = "linux")]
+    {
+        // Linking through the adapter keeps the previous storing contract.
+        store::link_profile(&p, "工作 语料").unwrap();
+        let shared = p.profiles.join("工作 语料/state_5.sqlite");
+        assert!(shared.is_symlink(), "the shared store must be linked");
+        assert_eq!(
+            platform::fs::file_identity(&shared),
+            platform::fs::file_identity(&p.base.join("state_5.sqlite")),
+            "and it must resolve to the base database"
+        );
+    }
 
     // Per-window Electron data stays inside this Paths' home with the name.
     let dir = windows::user_data_dir(&p, "工作 语料");
@@ -121,8 +128,25 @@ fn a_dangling_auth_symlink_reads_as_signed_out_not_as_a_dead_profile() {
     std::fs::remove_dir_all(&t).ok();
 }
 
+#[allow(dead_code)]
+struct MutatingRepairScope;
+#[allow(dead_code)]
+impl MutatingRepairScope {
+    fn enable() -> Self {
+        store::enable_mutating_repair_for_test(true);
+        Self
+    }
+}
+impl Drop for MutatingRepairScope {
+    fn drop(&mut self) {
+        store::enable_mutating_repair_for_test(false);
+    }
+}
+
 #[test]
+#[cfg(target_os = "linux")]
 fn repair_displaced_every_file_into_the_backup_for_rollback() {
+    let _scope = MutatingRepairScope::enable();
     // Upgrade/rollback rehearsal: after repair, every displaced original must
     // be inside the backup with its data readable, so a manual restore or a
     // ships-broken upgrade can walk everything back.

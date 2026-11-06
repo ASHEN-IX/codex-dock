@@ -106,6 +106,15 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+fn validate_profile_name(name: &str, field: &str) -> Result<()> {
+    if !valid_name(name) || !safe_segment(name) {
+        return Err(Error::Msg(format!(
+            "invalid {field} '{name}': use letters, digits, '-' or '_'"
+        )));
+    }
+    Ok(())
+}
+
 /// Whether a profile name can be safely joined onto a directory without
 /// escaping it. Created profiles already pass [`valid_name`], but names also
 /// arrive from UI input, the CLI and disk listings, so the joins in
@@ -120,68 +129,412 @@ pub fn safe_segment(name: &str) -> bool {
             .any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
 }
 
-pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
-    if !valid_name(name) {
-        return Err(Error::Msg(format!(
-            "invalid account name '{name}': use letters, digits, '-' or '_'"
-        )));
-    }
-    let path = p.profiles.join(name);
-    if path.exists() {
-        return Err(Error::Msg(format!("account '{name}' already exists")));
-    }
-    std::fs::create_dir_all(&path)?;
-
-    if let Some(src) = clone_from {
-        for item in ["config.toml", "rules", "skills"] {
-            let from = p.profiles.join(src).join(item);
-            if !from.exists() {
-                continue;
-            }
-            let to = path.join(item);
-            if from.is_dir() {
-                copy_dir(&from, &to)?;
-            } else {
-                std::fs::copy(&from, &to)?;
-            }
-        }
-    }
-
-    let (account_id, logged_in) = auth_info(&path.join("auth.json"));
-    Ok(Account {
-        name: name.to_string(),
-        path,
-        account_id,
-        logged_in,
-    })
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountCreation {
+    pub account: Account,
+    pub shared_store: bool,
 }
 
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+fn copy_file_secure(from: &Path, to: &Path, canonical_root: &Path) -> Result<()> {
+    if from.is_symlink() {
+        let resolved = std::fs::canonicalize(from)?;
+        if !resolved.starts_with(canonical_root) {
+            return Err(Error::Msg(format!(
+                "refusing to clone symlink '{}': target '{}' escapes source profile root",
+                from.display(),
+                resolved.display()
+            )));
+        }
+    }
+    std::fs::copy(from, to).map(|_| ()).map_err(Error::Io)
+}
+
+fn copy_dir_secure(from: &Path, to: &Path, canonical_root: &Path) -> Result<()> {
+    if from.is_symlink() {
+        let resolved = std::fs::canonicalize(from)?;
+        if !resolved.starts_with(canonical_root) {
+            return Err(Error::Msg(format!(
+                "refusing to clone directory symlink '{}': target '{}' escapes source profile root",
+                from.display(),
+                resolved.display()
+            )));
+        }
+    }
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
+        let entry_path = entry.path();
         let target = to.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_dir(&entry.path(), &target)?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let resolved = match std::fs::canonicalize(&entry_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(Error::Msg(format!(
+                        "cannot copy symlink '{}': failed to resolve target: {e}",
+                        entry_path.display()
+                    )));
+                }
+            };
+            if !resolved.starts_with(canonical_root) {
+                return Err(Error::Msg(format!(
+                    "refusing to clone symlink '{}': target '{}' escapes source profile root",
+                    entry_path.display(),
+                    resolved.display()
+                )));
+            }
+        }
+        if file_type.is_dir() {
+            copy_dir_secure(&entry_path, &target, canonical_root)?;
         } else {
-            std::fs::copy(entry.path(), target)?;
+            std::fs::copy(&entry_path, &target)?;
         }
     }
     Ok(())
 }
 
+pub fn create_staged(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<(Account, String)> {
+    validate_profile_name(name, "account name")?;
+    let final_path = p.profiles.join(name);
+    if final_path.exists() || final_path.is_symlink() {
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+
+    std::fs::create_dir_all(&p.profiles)?;
+    let canonical_profiles =
+        std::fs::canonicalize(&p.profiles).unwrap_or_else(|_| p.profiles.clone());
+
+    let mut canonical_src_opt = None;
+    if let Some(src) = clone_from {
+        validate_profile_name(src, "clone source")?;
+        let src_path = p.profiles.join(src);
+        if !src_path.is_dir() {
+            return Err(Error::Msg(format!("clone source '{src}' does not exist")));
+        }
+        let canonical_src = std::fs::canonicalize(&src_path)?;
+        if !canonical_src.starts_with(&canonical_profiles) || canonical_src == canonical_profiles {
+            return Err(Error::Msg(format!(
+                "clone source '{src}' escapes profile root"
+            )));
+        }
+        canonical_src_opt = Some(canonical_src);
+    }
+
+    // Synchronize simultaneous creation attempts using a persistent profile creation lock:
+    let create_lock_path = p.profiles.join(format!(".create-{name}.lock"));
+    let _create_guard = crate::platform::fs::LockGuard::try_acquire(
+        &create_lock_path,
+        &format!("simultaneous account creation attempt for '{name}'"),
+    )?;
+
+    // Re-check target existence after acquiring creation lock:
+    if final_path.exists() || final_path.is_symlink() {
+        return Err(Error::Msg(format!("account '{name}' already exists")));
+    }
+
+    // Stage in a temporary private hidden directory:
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let token = format!("{}-{}-{}", std::process::id(), nonce, name);
+    let staging_dir = p.profiles.join(format!(".staging-{name}-{nonce}"));
+    crate::platform::fs::create_private_dir(&staging_dir)?;
+
+    // Write ownership token inside staging directory:
+    let token_path = staging_dir.join(".dock-creation-token");
+    if let Err(e) = std::fs::write(&token_path, &token) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(Error::Io(e));
+    }
+
+    if let Some(canonical_src) = canonical_src_opt {
+        for item in ["config.toml", "rules", "skills"] {
+            let from = canonical_src.join(item);
+            if !from.exists() && !from.is_symlink() {
+                continue;
+            }
+            let to = staging_dir.join(item);
+            let copy_res = if from.is_dir() {
+                copy_dir_secure(&from, &to, &canonical_src)
+            } else {
+                copy_file_secure(&from, &to, &canonical_src)
+            };
+            if let Err(e) = copy_res {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(e);
+            }
+        }
+    }
+
+    // Atomic publication from staging_dir to final_path:
+    // Platform-safe atomic no-replace publication that cannot overwrite an existing directory
+    if let Err(e) = crate::platform::fs::atomic_rename_no_replace(&staging_dir, &final_path) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err(e);
+    }
+
+    let (account_id, logged_in) = auth_info(&final_path.join("auth.json"));
+    Ok((
+        Account {
+            name: name.to_string(),
+            path: final_path,
+            account_id,
+            logged_in,
+        },
+        token,
+    ))
+}
+
+pub fn create(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Account> {
+    let (account, _) = create_staged(p, name, clone_from)?;
+    let _ = std::fs::remove_file(account.path.join(".dock-creation-token"));
+    Ok(account)
+}
+
+/// Transactional account creation workflow.
+///
+/// Preflights inputs and platform compatibility before filesystem modification.
+/// On platforms with validated shared-store support (Linux), links the profile
+/// to the shared store with automatic rollback on linking failure.
+/// On unverified platforms (Windows, macOS), uses isolation-only behavior,
+/// never invoking unsupported shared-store operations.
+pub fn add_account(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<AccountCreation> {
+    validate_profile_name(name, "account name")?;
+    if let Some(src) = clone_from {
+        validate_profile_name(src, "clone source")?;
+    }
+
+    let should_link =
+        crate::platform::capabilities().shared_store_compatibility == crate::platform::Support::Yes;
+
+    let (account, token) = create_staged(p, name, clone_from)?;
+
+    if should_link {
+        if let Err(e) = crate::store::link_profile(p, name) {
+            // Ownership-safe rollback:
+            // Never delete or overwrite pre-existing profile data during rollback.
+            // Do not delete a target directory if ownership cannot be established.
+            let token_path = account.path.join(".dock-creation-token");
+            let disk_token = std::fs::read_to_string(&token_path).unwrap_or_default();
+            if disk_token == token {
+                let _ = std::fs::remove_dir_all(&account.path);
+                return Err(Error::Msg(format!(
+                    "could not link shared store for '{name}': {e}"
+                )));
+            } else {
+                return Err(Error::Msg(format!(
+                    "could not link shared store for '{name}': {e}; rollback aborted: ownership of '{}' could not be established",
+                    account.path.display()
+                )));
+            }
+        }
+    }
+
+    // Clean up ownership token upon completed successful creation:
+    let _ = std::fs::remove_file(account.path.join(".dock-creation-token"));
+
+    Ok(AccountCreation {
+        account,
+        shared_store: should_link,
+    })
+}
+
 pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
-    if !safe_segment(name) {
+    remove_with_proc_root(
+        p,
+        name,
+        backup,
+        crate::platform::process::proc_root().as_deref(),
+    )
+}
+
+pub fn remove_with_proc_root(
+    p: &Paths,
+    name: &str,
+    backup: &Path,
+    proc_root: Option<&Path>,
+) -> Result<PathBuf> {
+    if !safe_segment(name) || name.starts_with('.') {
         return Err(Error::Msg(format!("invalid account name '{name}'")));
     }
     let from = p.profiles.join(name);
     if !from.exists() {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
     }
+
+    if let (Ok(canon_from), Ok(canon_profiles)) = (
+        std::fs::canonicalize(&from),
+        std::fs::canonicalize(&p.profiles),
+    ) {
+        if !canon_from.starts_with(&canon_profiles) || canon_from == canon_profiles {
+            return Err(Error::Msg(format!("account '{name}' escapes profile root")));
+        }
+    }
+
+    // Synchronize with creation: ensure no creation is in progress
+    let create_lock_path = p.profiles.join(format!(".create-{name}.lock"));
+    let _create_guard = crate::platform::fs::LockGuard::try_acquire(
+        &create_lock_path,
+        &format!("cannot remove: account creation for '{name}' is currently in progress"),
+    )?;
+
+    // Synchronize with login: ensure no login is in progress
+    let login_lock_path = p.profiles.join(format!(".login-{name}.lock"));
+    let _login_guard = crate::platform::fs::LockGuard::try_acquire(
+        &login_lock_path,
+        &format!("cannot remove: login for profile '{name}' is currently in progress"),
+    )?;
+
+    // Synchronize with launch: ensure no launch is in progress
+    let launch_lock_path = from.join(".desktop-launch.lock");
+    let launch_guard = crate::platform::fs::LockGuard::try_acquire(
+        &launch_lock_path,
+        &format!("cannot remove: desktop launch for profile '{name}' is currently in progress"),
+    )?;
+
+    // Refuse removal when process inspection is unsupported, incomplete, or unreliable
+    let proc_root = match proc_root {
+        Some(pr) => pr,
+        None => {
+            return Err(Error::Msg(format!(
+                "cannot remove '{name}': native process discovery is unsupported or unavailable on this platform ({}); active Codex windows cannot be safely excluded",
+                std::env::consts::OS
+            )));
+        }
+    };
+
+    if !proc_root.is_dir() {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': process discovery root '{}' is missing or unreadable; active Codex windows cannot be safely excluded",
+            proc_root.display()
+        )));
+    }
+
+    let running = crate::windows::scan_running_for(p, proc_root).map_err(|e| {
+        Error::Msg(format!(
+            "cannot remove '{name}': process inspection failed: {e}"
+        ))
+    })?;
+
+    let config_root = crate::platform::fs::config_dir_at(p.home());
+    let active = running.into_iter().any(|w| {
+        if w.account != name {
+            return false;
+        }
+        if !w.user_data_dir.as_os_str().is_empty() && w.user_data_dir.starts_with(&config_root) {
+            return true;
+        }
+        let env =
+            std::fs::read(proc_root.join(w.pid.to_string()).join("environ")).unwrap_or_default();
+        env.split(|b| *b == 0)
+            .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
+            .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
+            .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
+            .unwrap_or(false)
+    });
+    if active {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': active Codex window is running for this account; close it first"
+        )));
+    }
+
+    // Destination collision checks before mutating filesystem
     std::fs::create_dir_all(backup)?;
-    let to = backup.join(name);
-    std::fs::rename(&from, &to)?;
-    Ok(to)
+    let to_profile = backup.join(name);
+    if to_profile.exists() || std::fs::symlink_metadata(&to_profile).is_ok() {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': backup destination '{}' already exists",
+            to_profile.display()
+        )));
+    }
+    let user_data = p.user_data_dir(name);
+    let to_user_data = backup.join(format!("Codex-{name}-userdata"));
+    if user_data.exists()
+        && (to_user_data.exists() || std::fs::symlink_metadata(&to_user_data).is_ok())
+    {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': backup destination '{}' already exists",
+            to_user_data.display()
+        )));
+    }
+
+    // Release launch lock guard before moving the profile directory;
+    // on Windows NTFS, a directory containing an open file handle cannot be renamed.
+    drop(launch_guard);
+
+    // Atomic move of the profile directory to backup (no-replace)
+    crate::platform::fs::atomic_rename_no_replace(&from, &to_profile)?;
+
+    // Atomic move of user data directory (if present) to backup (no-replace)
+    if user_data.exists() {
+        if let Err(e) = crate::platform::fs::atomic_rename_no_replace(&user_data, &to_user_data) {
+            return Err(Error::PartialRemoval {
+                profile_backup: to_profile,
+                message: format!(
+                    "could not move user data '{}' to '{}': {e}",
+                    user_data.display(),
+                    to_user_data.display()
+                ),
+            });
+        }
+    }
+
+    Ok(to_profile)
+}
+
+/// Validate an account target for login operations.
+///
+/// Ensures the account name is well-formed, resolves against the actual managed
+/// profile list, rejects path traversal and symlink escapes, and verifies that
+/// login can only modify the intended profile directory.
+pub fn validate_login_target(p: &Paths, name: &str) -> Result<PathBuf> {
+    if !safe_segment(name) || name.starts_with('.') {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
+
+    let managed = profiles(p)?;
+    if !managed.iter().any(|a| a.name == name) {
+        return Err(Error::Msg(format!(
+            "account '{name}' is not a managed profile"
+        )));
+    }
+
+    let target = p.profiles.join(name);
+    if !target.is_dir() {
+        return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+
+    let canonical_profiles = std::fs::canonicalize(&p.profiles).map_err(|e| {
+        Error::Msg(format!(
+            "failed to canonicalize profiles root '{}': {e}",
+            p.profiles.display()
+        ))
+    })?;
+    let canonical_target = std::fs::canonicalize(&target).map_err(|e| {
+        Error::Msg(format!(
+            "failed to canonicalize account directory '{}': {e}",
+            target.display()
+        ))
+    })?;
+
+    if !canonical_target.starts_with(&canonical_profiles) || canonical_target == canonical_profiles
+    {
+        return Err(Error::Msg(format!(
+            "account '{name}' escapes managed profiles directory"
+        )));
+    }
+
+    Ok(target)
+}
+
+/// Acquire the cross-process per-profile login/lifecycle lock guard.
+pub fn acquire_login_lock(p: &Paths, name: &str) -> Result<crate::platform::fs::LockGuard> {
+    if !safe_segment(name) || name.starts_with('.') {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
+    let lock_path = p.profiles.join(format!(".login-{name}.lock"));
+    crate::platform::fs::LockGuard::try_acquire(&lock_path, &format!("login for profile '{name}'"))
 }
 
 /// Prepare a profile for `codex login`, keeping whatever it was signed in with.
@@ -260,7 +613,7 @@ pub fn restore_auth(profile: &Path, backup: &Path) -> Result<bool> {
 /// Moved, not deleted, into the same backup so a mis-click is recoverable.
 /// A missing directory is not an error: the account may never have been opened.
 pub fn remove_user_data_dir(p: &Paths, name: &str, backup: &Path) -> Result<()> {
-    if !safe_segment(name) {
+    if !safe_segment(name) || name.starts_with('.') {
         return Err(Error::Msg(format!("invalid account name '{name}'")));
     }
     let dir = p.user_data_dir(name);
@@ -268,6 +621,12 @@ pub fn remove_user_data_dir(p: &Paths, name: &str, backup: &Path) -> Result<()> 
         return Ok(());
     }
     std::fs::create_dir_all(backup)?;
-    std::fs::rename(&dir, backup.join(format!("Codex-{name}-userdata")))?;
-    Ok(())
+    let to = backup.join(format!("Codex-{name}-userdata"));
+    if to.exists() || std::fs::symlink_metadata(&to).is_ok() {
+        return Err(Error::Msg(format!(
+            "refusing to move user data: backup destination '{}' already exists",
+            to.display()
+        )));
+    }
+    crate::platform::fs::atomic_rename_no_replace(&dir, &to)
 }

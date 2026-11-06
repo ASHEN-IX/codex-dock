@@ -147,15 +147,17 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Create an account, point it at the shared store, and start device sign-in.
+/// Create an account with safe preflight and transaction rollback.
+/// On supported platforms (Linux), links the shared store.
+/// On unverified platforms (Windows, macOS), uses isolation-only behavior.
 #[tauri::command]
 fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::Value, String> {
     let p = Paths::real();
-    let account = accounts::create(&p, &name, clone_from.as_deref()).map_err(|e| e.to_string())?;
-    store::link_profile(&p, &name).map_err(|e| e.to_string())?;
+    let res = accounts::add_account(&p, &name, clone_from.as_deref()).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
-        "name": account.name,
-        "loggedIn": account.logged_in,
+        "name": res.account.name,
+        "loggedIn": res.account.logged_in,
+        "sharedStore": res.shared_store,
     }))
 }
 
@@ -168,10 +170,8 @@ fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::V
 #[tauri::command]
 fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     let p = Paths::real();
-    let home = p.profiles.join(&name);
-    if !home.is_dir() {
-        return Err(format!("account '{name}' does not exist"));
-    }
+    let home = accounts::validate_login_target(&p, &name).map_err(|e| e.to_string())?;
+    let login_guard = accounts::acquire_login_lock(&p, &name).map_err(|e| e.to_string())?;
     {
         let state = app.state::<LoginState>();
         let mut map = state
@@ -187,11 +187,16 @@ fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
         }
         map.insert(name.clone(), Login::starting());
     }
-    std::thread::spawn(move || run_login(app, name, home));
+    std::thread::spawn(move || run_login(app, name, home, login_guard));
     Ok(())
 }
 
-fn run_login(app: tauri::AppHandle, name: String, home: std::path::PathBuf) {
+fn run_login(
+    app: tauri::AppHandle,
+    name: String,
+    home: std::path::PathBuf,
+    _login_guard: codex_dock_core::platform::fs::LockGuard,
+) {
     use std::io::{BufRead, BufReader};
 
     // `codex login` rewrites auth.json through a symlink. The live layout links
@@ -412,8 +417,19 @@ fn delete_account(name: String) -> Result<serde_json::Value, String> {
     let p = Paths::real();
     let stamp = now().to_string();
     let bak = p.backup_dir(&stamp);
-    let moved = accounts::remove(&p, &name, &bak).map_err(|e| e.to_string())?;
-    accounts::remove_user_data_dir(&p, &name, &bak).map_err(|e| e.to_string())?;
+    let moved = match accounts::remove(&p, &name, &bak) {
+        Ok(m) => m,
+        Err(codex_dock_core::Error::PartialRemoval {
+            profile_backup,
+            message,
+        }) => {
+            return Err(format!(
+                "partial removal failure: profile moved to '{}', but user data move failed: {message}",
+                profile_backup.display()
+            ));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     Ok(serde_json::json!({
         "moved": moved.display().to_string(),
         "backup": bak.display().to_string(),
@@ -794,4 +810,79 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Codex Dock");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let t = std::env::temp_dir().join(format!("cd-tauri-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        t
+    }
+
+    #[test]
+    fn login_validation_rejects_traversal_and_unmanaged_profiles() {
+        let t = tmp("login_traversal");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+
+        // 1. Path traversal attacks
+        assert!(accounts::validate_login_target(&p, "../foo").is_err());
+        assert!(accounts::validate_login_target(&p, "..").is_err());
+        assert!(accounts::validate_login_target(&p, "foo/bar").is_err());
+        assert!(accounts::validate_login_target(&p, "foo\\bar").is_err());
+        assert!(accounts::validate_login_target(&p, ".hidden").is_err());
+
+        // 2. Unmanaged directory that was not created as an account
+        let outside = t.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(accounts::validate_login_target(&p, "outside").is_err());
+
+        // 3. Managed account succeeds
+        accounts::create(&p, "valid_user", None).unwrap();
+        let target = accounts::validate_login_target(&p, "valid_user").unwrap();
+        assert_eq!(target, p.profiles.join("valid_user"));
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn login_validation_rejects_symlink_escapes() {
+        let t = tmp("login_symlink");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+
+        let target_outside = t.join("secret_data");
+        std::fs::create_dir_all(&target_outside).unwrap();
+
+        std::os::unix::fs::symlink(&target_outside, p.profiles.join("escaped_acc")).unwrap();
+        assert!(accounts::validate_login_target(&p, "escaped_acc").is_err());
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn login_lifecycle_lock_synchronization() {
+        let t = tmp("login_lock");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+        accounts::create(&p, "alice", None).unwrap();
+
+        // 1. Acquire login lock
+        let guard1 = accounts::acquire_login_lock(&p, "alice").unwrap();
+
+        // 2. Competing acquisition attempt fails
+        assert!(accounts::acquire_login_lock(&p, "alice").is_err());
+
+        // 3. Drop guard releases the lock
+        drop(guard1);
+        let guard2 = accounts::acquire_login_lock(&p, "alice");
+        assert!(guard2.is_ok());
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }

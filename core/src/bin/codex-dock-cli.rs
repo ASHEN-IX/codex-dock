@@ -77,7 +77,7 @@ fn running_line(window: &windows::WindowProc) -> String {
 
 fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
     if let codex_dock_core::platform::Support::No(reason) =
-        codex_dock_core::platform::capabilities().process_table
+        codex_dock_core::platform::capabilities().native_process_discovery
     {
         eprintln!("no running windows to report: {reason}");
         return 1;
@@ -139,19 +139,20 @@ fn cmd_usage(p: &Paths, with_usage: bool) -> i32 {
 }
 
 fn cmd_add(p: &Paths, name: &str, clone_from: Option<&str>) -> i32 {
-    let account = match accounts::create(p, name, clone_from) {
-        Ok(a) => a,
+    let res = match accounts::add_account(p, name, clone_from) {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("could not create '{name}': {e}");
+            eprintln!("could not add account '{name}': {e}");
             return 1;
         }
     };
-    if let Err(e) = store::link_profile(p, name) {
-        eprintln!("created '{name}' but could not link the shared store: {e}");
-        return 1;
+    let profile_path = p.profiles.join(name);
+    println!("created '{name}' ({})", profile_path.display());
+    if res.shared_store {
+        println!("store:   linked to the shared database");
+    } else {
+        println!("store:   isolated profile (shared store not supported on this platform)");
     }
-    println!("created '{}' ({})", account.name, account.path.display());
-    println!("store:   linked to the shared database");
     println!("sign in: codex-dock login {name}");
     0
 }
@@ -160,12 +161,20 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
     let bak = p.backup_dir(&stamp());
     match accounts::remove(p, name, &bak) {
         Ok(moved) => {
-            if let Err(e) = accounts::remove_user_data_dir(p, name, &bak) {
-                eprintln!("profile moved, but window data stayed behind: {e}");
-            }
             println!("removed '{}' -> {}", name, moved.display());
             println!("backup:  {}", bak.display());
             0
+        }
+        Err(codex_dock_core::Error::PartialRemoval {
+            profile_backup,
+            message,
+        }) => {
+            eprintln!(
+                "partial removal: profile moved to '{}', but window data stayed behind: {message}",
+                profile_backup.display()
+            );
+            println!("backup:  {}", bak.display());
+            1
         }
         Err(e) => {
             eprintln!("could not remove '{name}': {e}");
@@ -175,11 +184,20 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
 }
 
 fn cmd_login(p: &Paths, name: &str) -> i32 {
-    let home = p.profiles.join(name);
-    if !home.is_dir() {
-        eprintln!("account '{name}' does not exist");
-        return 1;
-    }
+    let home = match accounts::validate_login_target(p, name) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("cannot sign in to '{name}': {e}");
+            return 1;
+        }
+    };
+    let _login_guard = match accounts::acquire_login_lock(p, name) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("cannot sign in to '{name}': {e}");
+            return 1;
+        }
+    };
     // Same protection as the window: never let login write through a symlink
     // into another account's credentials.
     let bak = p.backup_dir(&stamp());
@@ -296,7 +314,7 @@ fn main() {
             eprintln!("unknown command '{other}'");
             eprintln!(
                 "commands: status | list | usage | add <name> [clone] | remove <name> | \
-                 login <name> | repair | launch <name> | running [name]"
+                 login <name> | repair (disabled) | launch <name> | running [name]"
             );
             1
         }

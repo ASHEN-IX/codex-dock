@@ -9,9 +9,14 @@ use codex_dock_core::platform::{self, Support};
 fn absent_capabilities_carry_a_reason_and_refuse_functions_state_so() {
     let caps = platform::capabilities();
     for (name, support) in [
-        ("shared_store_links", caps.shared_store_links),
-        ("process_table", caps.process_table),
+        ("filesystem_symlinks", caps.filesystem_symlinks),
+        (
+            "shared_store_compatibility",
+            caps.shared_store_compatibility,
+        ),
+        ("native_process_discovery", caps.native_process_discovery),
         ("window_activation", caps.window_activation),
+        ("safe_desktop_launch", caps.safe_desktop_launch),
     ] {
         match support {
             Support::Yes => {
@@ -33,29 +38,39 @@ fn platform_expectations_are_pinned_explicitly() {
     let caps = platform::capabilities();
     #[cfg(target_os = "linux")]
     {
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert_eq!(caps.process_table, Support::Yes);
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert_eq!(caps.shared_store_compatibility, Support::Yes);
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert_eq!(caps.window_activation, Support::Yes);
+        assert_eq!(caps.safe_desktop_launch, Support::Yes);
     }
     #[cfg(target_os = "macos")]
     {
-        assert_eq!(caps.shared_store_links, Support::Yes);
-        assert!(matches!(caps.process_table, Support::No(_)));
+        // Filesystem symlinks exist on macOS, but multi-profile database sharing
+        // is NOT runtime validated, so shared store is explicitly reported No.
+        assert_eq!(caps.filesystem_symlinks, Support::Yes);
+        assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
+        assert!(matches!(caps.native_process_discovery, Support::No(_)));
         assert!(matches!(caps.window_activation, Support::No(_)));
+        assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
     #[cfg(target_os = "windows")]
     {
         // Phase 1 promises only isolation on Windows: everything below must
         // read as absent, never half-claimed.
-        assert!(matches!(caps.shared_store_links, Support::No(_)));
-        assert!(matches!(caps.process_table, Support::No(_)));
+        assert!(matches!(caps.filesystem_symlinks, Support::No(_)));
+        assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
+        assert!(matches!(caps.native_process_discovery, Support::No(_)));
         assert!(matches!(caps.window_activation, Support::No(_)));
+        assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        assert!(matches!(caps.shared_store_links, Support::No(_)));
-        assert!(matches!(caps.process_table, Support::No(_)));
+        assert!(matches!(caps.filesystem_symlinks, Support::No(_)));
+        assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
+        assert!(matches!(caps.native_process_discovery, Support::No(_)));
         assert!(matches!(caps.window_activation, Support::No(_)));
+        assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
 }
 
@@ -63,6 +78,15 @@ fn platform_expectations_are_pinned_explicitly() {
 #[cfg(target_os = "windows")]
 fn windows_refuses_linking_and_repair_before_mutation() {
     let t = std::env::temp_dir().join(format!("cd-win-refuse-{}", std::process::id()));
+    let p = codex_dock_core::Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    assert!(codex_dock_core::store::link_profile(&p, "work").is_err());
+    assert!(codex_dock_core::store::repair(&p, &t.join("bak")).is_err());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn macos_refuses_linking_and_repair_before_mutation() {
+    let t = std::env::temp_dir().join(format!("cd-mac-refuse-{}", std::process::id()));
     let p = codex_dock_core::Paths::new(t.join(".codex"), t.join(".codex-profiles"));
     assert!(codex_dock_core::store::link_profile(&p, "work").is_err());
     assert!(codex_dock_core::store::repair(&p, &t.join("bak")).is_err());

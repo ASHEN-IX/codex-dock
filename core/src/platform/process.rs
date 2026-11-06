@@ -28,7 +28,7 @@ pub fn supported() -> bool {
 
 fn cap_supported() -> bool {
     matches!(
-        crate::platform::capabilities().process_table,
+        crate::platform::capabilities().native_process_discovery,
         crate::platform::Support::Yes
     )
 }

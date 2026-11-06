@@ -78,7 +78,7 @@ fn merge_is_a_noop_when_the_state_files_are_missing() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn repair_syncs_projects_but_keeps_each_windows_account() {
     use codex_dock_core::{db, Paths};
     let t = tmp("repair");
@@ -91,7 +91,7 @@ fn repair_syncs_projects_but_keeps_each_windows_account() {
     std::fs::write(p.profiles.join("work/.codex-global-state.json"),
         r#"{"local-projects":{},"electron-persisted-atom-state":{"local-document-identity":{"accountId":"MINE"}}}"#).unwrap();
 
-    store::repair(&p, &p.backup_dir("s")).unwrap();
+    store::sync_projects(&p, "work").unwrap();
 
     let out: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(p.profiles.join("work/.codex-global-state.json")).unwrap(),
@@ -109,7 +109,7 @@ fn repair_syncs_projects_but_keeps_each_windows_account() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn a_new_profile_imports_projects_without_base_identity_or_migration_flags() {
     use codex_dock_core::{accounts, Paths};
     let t = tmp("fresh-projects");
