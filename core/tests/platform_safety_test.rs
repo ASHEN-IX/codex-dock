@@ -5,7 +5,9 @@
 //! - Platform capability separation (symlinks vs shared-store compatibility).
 //! - Windows and macOS isolation-only behavior.
 
-use codex_dock_core::platform::fs::{atomic_rename_no_replace, LockGuard};
+use codex_dock_core::platform::fs::atomic_rename_no_replace;
+#[cfg(unix)]
+use codex_dock_core::platform::fs::LockGuard;
 use codex_dock_core::{accounts, store, Paths};
 #[cfg(target_os = "linux")]
 use codex_dock_core::{db, windows};
