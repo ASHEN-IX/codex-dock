@@ -168,6 +168,17 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
             println!("backup:  {}", bak.display());
             0
         }
+        Err(codex_dock_core::Error::PartialRemoval {
+            profile_backup,
+            message,
+        }) => {
+            eprintln!(
+                "partial removal: profile moved to '{}', but window data stayed behind: {message}",
+                profile_backup.display()
+            );
+            println!("backup:  {}", bak.display());
+            1
+        }
         Err(e) => {
             eprintln!("could not remove '{name}': {e}");
             1
@@ -176,11 +187,13 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
 }
 
 fn cmd_login(p: &Paths, name: &str) -> i32 {
-    let home = p.profiles.join(name);
-    if !home.is_dir() {
-        eprintln!("account '{name}' does not exist");
-        return 1;
-    }
+    let home = match accounts::validate_login_target(p, name) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("cannot sign in to '{name}': {e}");
+            return 1;
+        }
+    };
     // Same protection as the window: never let login write through a symlink
     // into another account's credentials.
     let bak = p.backup_dir(&stamp());

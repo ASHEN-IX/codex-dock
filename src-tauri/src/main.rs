@@ -170,10 +170,7 @@ fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::V
 #[tauri::command]
 fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     let p = Paths::real();
-    let home = p.profiles.join(&name);
-    if !home.is_dir() {
-        return Err(format!("account '{name}' does not exist"));
-    }
+    let home = accounts::validate_login_target(&p, &name).map_err(|e| e.to_string())?;
     {
         let state = app.state::<LoginState>();
         let mut map = state
@@ -414,7 +411,19 @@ fn delete_account(name: String) -> Result<serde_json::Value, String> {
     let p = Paths::real();
     let stamp = now().to_string();
     let bak = p.backup_dir(&stamp);
-    let moved = accounts::remove(&p, &name, &bak).map_err(|e| e.to_string())?;
+    let moved = match accounts::remove(&p, &name, &bak) {
+        Ok(m) => m,
+        Err(codex_dock_core::Error::PartialRemoval {
+            profile_backup,
+            message,
+        }) => {
+            return Err(format!(
+                "partial removal failure: profile moved to '{}', but user data move failed: {message}",
+                profile_backup.display()
+            ));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     accounts::remove_user_data_dir(&p, &name, &bak).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "moved": moved.display().to_string(),
@@ -796,4 +805,58 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Codex Dock");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let t = std::env::temp_dir().join(format!("cd-tauri-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        t
+    }
+
+    #[test]
+    fn login_validation_rejects_traversal_and_unmanaged_profiles() {
+        let t = tmp("login_traversal");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+
+        // 1. Path traversal attacks
+        assert!(accounts::validate_login_target(&p, "../foo").is_err());
+        assert!(accounts::validate_login_target(&p, "..").is_err());
+        assert!(accounts::validate_login_target(&p, "foo/bar").is_err());
+        assert!(accounts::validate_login_target(&p, "foo\\bar").is_err());
+        assert!(accounts::validate_login_target(&p, ".hidden").is_err());
+
+        // 2. Unmanaged directory that was not created as an account
+        let outside = t.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(accounts::validate_login_target(&p, "outside").is_err());
+
+        // 3. Managed account succeeds
+        accounts::create(&p, "valid_user", None).unwrap();
+        let target = accounts::validate_login_target(&p, "valid_user").unwrap();
+        assert_eq!(target, p.profiles.join("valid_user"));
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn login_validation_rejects_symlink_escapes() {
+        let t = tmp("login_symlink");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+
+        let target_outside = t.join("secret_data");
+        std::fs::create_dir_all(&target_outside).unwrap();
+
+        std::os::unix::fs::symlink(&target_outside, p.profiles.join("escaped_acc")).unwrap();
+        assert!(accounts::validate_login_target(&p, "escaped_acc").is_err());
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }

@@ -763,6 +763,7 @@ fn atomic_no_replace_account_publication_refuses_empty_nonempty_and_symlinks() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn concurrent_create_and_remove_synchronization() {
     let t = tmp("create_remove_sync");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
@@ -945,4 +946,170 @@ fn read_only_diagnostics_preserve_database_and_wal_bytes_exactly() {
     );
 
     std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+fn mutating_repair_refuses_even_when_env_var_override_set() {
+    let t = tmp("repair_env_override");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    // Set production env var that was previously used as an override
+    std::env::set_var("CODEX_DOCK_ENABLE_MUTATING_REPAIR", "1");
+
+    let bak = t.join("bak");
+    let err = store::repair(&p, &bak).unwrap_err();
+    match &err {
+        codex_dock_core::Error::MaintenanceUnavailable(msg) => {
+            assert!(
+                msg.contains("mutating shared-store repair is disabled in this milestone"),
+                "expected MaintenanceUnavailable message, got: {msg}"
+            );
+        }
+        other => panic!("expected MaintenanceUnavailable, got: {other:?}"),
+    }
+    assert!(!bak.exists(), "must not create backup on refusal");
+
+    std::env::remove_var("CODEX_DOCK_ENABLE_MUTATING_REPAIR");
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+fn fail_closed_account_removal_when_process_discovery_unavailable_or_unreadable() {
+    let t = tmp("fail_closed_removal");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+    accounts::create(&p, "victim", None).unwrap();
+
+    let bak = t.join("backups");
+
+    // 1. When proc_root is None:
+    let err_none = accounts::remove_with_proc_root(&p, "victim", &bak, None).unwrap_err();
+    assert!(
+        err_none
+            .to_string()
+            .contains("native process discovery is unsupported or unavailable"),
+        "unexpected error: {err_none}"
+    );
+    assert!(p.profiles.join("victim").exists());
+
+    // 2. When proc_root is non-existent:
+    let non_existent = t.join("non_existent_proc");
+    let err_missing =
+        accounts::remove_with_proc_root(&p, "victim", &bak, Some(&non_existent)).unwrap_err();
+    assert!(
+        err_missing.to_string().contains("missing or unreadable"),
+        "unexpected error: {err_missing}"
+    );
+    assert!(p.profiles.join("victim").exists());
+
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn account_removal_refuses_when_backup_destination_collides() {
+    let t = tmp("removal_collision");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+    accounts::create(&p, "alice", None).unwrap();
+
+    let bak = t.join("backups");
+    std::fs::create_dir_all(&bak).unwrap();
+
+    // 1. Profile destination collision:
+    std::fs::create_dir_all(bak.join("alice")).unwrap();
+    let err = accounts::remove(&p, "alice", &bak).unwrap_err();
+    assert!(
+        err.to_string().contains("backup destination")
+            && err.to_string().contains("already exists"),
+        "expected backup collision error, got: {err}"
+    );
+    assert!(
+        p.profiles.join("alice").exists(),
+        "profile must not be removed on collision"
+    );
+
+    // Clear profile collision
+    let _ = std::fs::remove_dir_all(bak.join("alice"));
+
+    // 2. User data destination collision:
+    let udir = p.user_data_dir("alice");
+    std::fs::create_dir_all(&udir).unwrap();
+    std::fs::create_dir_all(bak.join("Codex-alice-userdata")).unwrap();
+
+    let err2 = accounts::remove(&p, "alice", &bak).unwrap_err();
+    assert!(
+        err2.to_string().contains("backup destination")
+            && err2.to_string().contains("already exists"),
+        "expected user-data backup collision error, got: {err2}"
+    );
+    assert!(
+        p.profiles.join("alice").exists(),
+        "profile must not be removed on collision"
+    );
+    assert!(udir.exists(), "user data must not be removed on collision");
+
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+fn account_removal_partial_failure_preserves_both_datasets() {
+    let t = tmp("partial_removal");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+    accounts::create(&p, "partial_acc", None).unwrap();
+
+    let bak = t.join("backups");
+    std::fs::create_dir_all(&bak).unwrap();
+
+    let partial_err = codex_dock_core::Error::PartialRemoval {
+        profile_backup: bak.join("partial_acc"),
+        message: "destination 'Codex-partial_acc-userdata' already exists".to_string(),
+    };
+    let formatted = partial_err.to_string();
+    assert!(formatted.contains("partial removal failure"));
+    assert!(formatted.contains("profile is safely preserved in backup"));
+
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+fn validate_login_target_security_checks() {
+    let t = tmp("validate_login");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+
+    // 1. Invalid names / traversal
+    assert!(accounts::validate_login_target(&p, "../etc").is_err());
+    assert!(accounts::validate_login_target(&p, "..").is_err());
+    assert!(accounts::validate_login_target(&p, ".dotfile").is_err());
+    assert!(accounts::validate_login_target(&p, "sub/dir").is_err());
+    assert!(accounts::validate_login_target(&p, "sub\\dir").is_err());
+    assert!(accounts::validate_login_target(&p, "").is_err());
+
+    // 2. Non-managed directories outside p.profiles
+    let outside = t.join("outside_dir");
+    std::fs::create_dir_all(&outside).unwrap();
+    assert!(accounts::validate_login_target(&p, "outside_dir").is_err());
+
+    // 3. Symlink escape (Unix only)
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, p.profiles.join("symlink_acc")).unwrap();
+        assert!(accounts::validate_login_target(&p, "symlink_acc").is_err());
+    }
+
+    // 4. Valid managed account
+    accounts::create(&p, "managed_bob", None).unwrap();
+    let res = accounts::validate_login_target(&p, "managed_bob");
+    assert!(res.is_ok());
+    assert_eq!(res.unwrap(), p.profiles.join("managed_bob"));
+
+    let _ = std::fs::remove_dir_all(&t);
 }

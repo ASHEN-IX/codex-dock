@@ -93,6 +93,7 @@ fn linking_an_unknown_account_is_refused() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn removing_an_account_also_parks_its_window_data() {
     let (t, p) = setup("rmdata");
     accounts::add_account(&p, "gone", None).unwrap();

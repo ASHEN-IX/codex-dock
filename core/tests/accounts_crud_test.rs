@@ -35,6 +35,7 @@ fn create_clones_config_from_source() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn remove_moves_the_profile_never_deletes() {
     let t = tmp("rm");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
@@ -43,5 +44,21 @@ fn remove_moves_the_profile_never_deletes() {
     let moved = accounts::remove(&p, "work", &bak).unwrap();
     assert!(moved.exists(), "profile must survive in the backup");
     assert!(!t.join(".codex-profiles/work").exists());
+    std::fs::remove_dir_all(&t).ok();
+}
+
+#[test]
+#[cfg(not(target_os = "linux"))]
+fn remove_refuses_when_native_process_discovery_is_unsupported() {
+    let t = tmp("rm_unsupported");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    accounts::create(&p, "work", None).unwrap();
+    let bak = p.backup_dir("stamp");
+    let err = accounts::remove(&p, "work", &bak).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("native process discovery is unsupported"),
+        "expected unsupported error, got: {err}"
+    );
     std::fs::remove_dir_all(&t).ok();
 }

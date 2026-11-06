@@ -341,12 +341,35 @@ pub fn add_account(p: &Paths, name: &str, clone_from: Option<&str>) -> Result<Ac
 }
 
 pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
-    if !safe_segment(name) {
+    remove_with_proc_root(
+        p,
+        name,
+        backup,
+        crate::platform::process::proc_root().as_deref(),
+    )
+}
+
+pub fn remove_with_proc_root(
+    p: &Paths,
+    name: &str,
+    backup: &Path,
+    proc_root: Option<&Path>,
+) -> Result<PathBuf> {
+    if !safe_segment(name) || name.starts_with('.') {
         return Err(Error::Msg(format!("invalid account name '{name}'")));
     }
     let from = p.profiles.join(name);
     if !from.exists() {
         return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+
+    if let (Ok(canon_from), Ok(canon_profiles)) = (
+        std::fs::canonicalize(&from),
+        std::fs::canonicalize(&p.profiles),
+    ) {
+        if !canon_from.starts_with(&canon_profiles) || canon_from == canon_profiles {
+            return Err(Error::Msg(format!("account '{name}' escapes profile root")));
+        }
     }
 
     // Synchronize with creation: ensure no creation is in progress
@@ -358,52 +381,144 @@ pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
 
     // Synchronize with launch: ensure no launch is in progress
     let launch_lock_path = from.join(".desktop-launch.lock");
-    let _launch_guard = if launch_lock_path.exists() {
-        Some(crate::platform::fs::LockGuard::try_acquire(
-            &launch_lock_path,
-            &format!("cannot remove: desktop launch for profile '{name}' is currently in progress"),
-        )?)
-    } else {
-        None
+    let launch_guard = crate::platform::fs::LockGuard::try_acquire(
+        &launch_lock_path,
+        &format!("cannot remove: desktop launch for profile '{name}' is currently in progress"),
+    )?;
+
+    // Refuse removal when process inspection is unsupported, incomplete, or unreliable
+    let proc_root = match proc_root {
+        Some(pr) => pr,
+        None => {
+            return Err(Error::Msg(format!(
+                "cannot remove '{name}': native process discovery is unsupported or unavailable on this platform ({}); active Codex windows cannot be safely excluded",
+                std::env::consts::OS
+            )));
+        }
     };
 
-    // Refuse removal if active Codex windows are running for this profile in this environment
-    if let Some(proc_root) = crate::platform::process::proc_root() {
-        let config_root = crate::platform::fs::config_dir_at(p.home());
-        if let Ok(running) = crate::windows::scan_running_for(p, &proc_root) {
-            let active = running.into_iter().any(|w| {
-                if w.account != name {
-                    return false;
-                }
-                if !w.user_data_dir.as_os_str().is_empty()
-                    && w.user_data_dir.starts_with(&config_root)
-                {
-                    return true;
-                }
-                let env = std::fs::read(proc_root.join(w.pid.to_string()).join("environ"))
-                    .unwrap_or_default();
-                env.split(|b| *b == 0)
-                    .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
-                    .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
-                    .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
-                    .unwrap_or(false)
-            });
-            if active {
-                return Err(Error::Msg(format!(
-                    "cannot remove '{name}': active Codex window is running for this account; close it first"
-                )));
-            }
+    if !proc_root.is_dir() {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': process discovery root '{}' is missing or unreadable; active Codex windows cannot be safely excluded",
+            proc_root.display()
+        )));
+    }
+
+    let running = crate::windows::scan_running_for(p, proc_root).map_err(|e| {
+        Error::Msg(format!(
+            "cannot remove '{name}': process inspection failed: {e}"
+        ))
+    })?;
+
+    let config_root = crate::platform::fs::config_dir_at(p.home());
+    let active = running.into_iter().any(|w| {
+        if w.account != name {
+            return false;
         }
+        if !w.user_data_dir.as_os_str().is_empty() && w.user_data_dir.starts_with(&config_root) {
+            return true;
+        }
+        let env =
+            std::fs::read(proc_root.join(w.pid.to_string()).join("environ")).unwrap_or_default();
+        env.split(|b| *b == 0)
+            .find_map(|v| v.strip_prefix(b"CODEX_HOME="))
+            .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
+            .map(|h| h.starts_with(&p.base) || h.starts_with(&p.profiles))
+            .unwrap_or(false)
+    });
+    if active {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': active Codex window is running for this account; close it first"
+        )));
+    }
+
+    // Destination collision checks before mutating filesystem
+    std::fs::create_dir_all(backup)?;
+    let to_profile = backup.join(name);
+    if to_profile.exists() || std::fs::symlink_metadata(&to_profile).is_ok() {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': backup destination '{}' already exists",
+            to_profile.display()
+        )));
+    }
+    let user_data = p.user_data_dir(name);
+    let to_user_data = backup.join(format!("Codex-{name}-userdata"));
+    if user_data.exists()
+        && (to_user_data.exists() || std::fs::symlink_metadata(&to_user_data).is_ok())
+    {
+        return Err(Error::Msg(format!(
+            "cannot remove '{name}': backup destination '{}' already exists",
+            to_user_data.display()
+        )));
     }
 
     // Release launch lock guard before moving the profile directory;
     // on Windows NTFS, a directory containing an open file handle cannot be renamed.
-    drop(_launch_guard);
+    drop(launch_guard);
 
-    std::fs::create_dir_all(backup)?;
-    let to = backup.join(name);
-    std::fs::rename(&from, &to)?;
-    Ok(to)
+    // Atomic move of the profile directory to backup (no-replace)
+    crate::platform::fs::atomic_rename_no_replace(&from, &to_profile)?;
+
+    // Atomic move of user data directory (if present) to backup (no-replace)
+    if user_data.exists() {
+        if let Err(e) = crate::platform::fs::atomic_rename_no_replace(&user_data, &to_user_data) {
+            return Err(Error::PartialRemoval {
+                profile_backup: to_profile,
+                message: format!(
+                    "could not move user data '{}' to '{}': {e}",
+                    user_data.display(),
+                    to_user_data.display()
+                ),
+            });
+        }
+    }
+
+    Ok(to_profile)
+}
+
+/// Validate an account target for login operations.
+///
+/// Ensures the account name is well-formed, resolves against the actual managed
+/// profile list, rejects path traversal and symlink escapes, and verifies that
+/// login can only modify the intended profile directory.
+pub fn validate_login_target(p: &Paths, name: &str) -> Result<PathBuf> {
+    if !safe_segment(name) || name.starts_with('.') {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
+
+    let managed = profiles(p)?;
+    if !managed.iter().any(|a| a.name == name) {
+        return Err(Error::Msg(format!(
+            "account '{name}' is not a managed profile"
+        )));
+    }
+
+    let target = p.profiles.join(name);
+    if !target.is_dir() {
+        return Err(Error::Msg(format!("account '{name}' does not exist")));
+    }
+
+    let canonical_profiles = std::fs::canonicalize(&p.profiles).map_err(|e| {
+        Error::Msg(format!(
+            "failed to canonicalize profiles root '{}': {e}",
+            p.profiles.display()
+        ))
+    })?;
+    let canonical_target = std::fs::canonicalize(&target).map_err(|e| {
+        Error::Msg(format!(
+            "failed to canonicalize account directory '{}': {e}",
+            target.display()
+        ))
+    })?;
+
+    if !canonical_target.starts_with(&canonical_profiles) || canonical_target == canonical_profiles
+    {
+        return Err(Error::Msg(format!(
+            "account '{name}' escapes managed profiles directory"
+        )));
+    }
+
+    Ok(target)
 }
 
 /// Prepare a profile for `codex login`, keeping whatever it was signed in with.
@@ -482,7 +597,7 @@ pub fn restore_auth(profile: &Path, backup: &Path) -> Result<bool> {
 /// Moved, not deleted, into the same backup so a mis-click is recoverable.
 /// A missing directory is not an error: the account may never have been opened.
 pub fn remove_user_data_dir(p: &Paths, name: &str, backup: &Path) -> Result<()> {
-    if !safe_segment(name) {
+    if !safe_segment(name) || name.starts_with('.') {
         return Err(Error::Msg(format!("invalid account name '{name}'")));
     }
     let dir = p.user_data_dir(name);
@@ -490,6 +605,12 @@ pub fn remove_user_data_dir(p: &Paths, name: &str, backup: &Path) -> Result<()> 
         return Ok(());
     }
     std::fs::create_dir_all(backup)?;
-    std::fs::rename(&dir, backup.join(format!("Codex-{name}-userdata")))?;
-    Ok(())
+    let to = backup.join(format!("Codex-{name}-userdata"));
+    if to.exists() || std::fs::symlink_metadata(&to).is_ok() {
+        return Err(Error::Msg(format!(
+            "refusing to move user data: backup destination '{}' already exists",
+            to.display()
+        )));
+    }
+    crate::platform::fs::atomic_rename_no_replace(&dir, &to)
 }

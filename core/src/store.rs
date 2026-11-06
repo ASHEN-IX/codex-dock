@@ -1,6 +1,8 @@
 use crate::db;
 use crate::paths::Paths;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(debug_assertions)]
+use std::path::PathBuf;
 
 pub const SHARED: [&str; 5] = [
     "state_5.sqlite",
@@ -178,6 +180,7 @@ fn report(state: StoreState, base_db: &std::path::Path) -> StoreReport {
 
 use crate::error::{Error, Result};
 
+#[cfg(debug_assertions)]
 fn move_aside(path: &Path, backup: &Path, label: &str) -> Result<()> {
     if !path.exists() && !path.is_symlink() {
         return Ok(());
@@ -190,6 +193,7 @@ fn move_aside(path: &Path, backup: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 fn ensure_unlocked(path: &Path, label: &str) -> Result<()> {
     if !path.is_file() {
         return Ok(());
@@ -210,6 +214,7 @@ fn ensure_unlocked(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 fn check_proc_file_handles_and_locks(proc_root: &Path, target_paths: &[PathBuf]) -> Result<()> {
     if !crate::platform::process::supported() {
         return Ok(());
@@ -369,12 +374,15 @@ fn check_proc_file_handles_and_locks(proc_root: &Path, target_paths: &[PathBuf])
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 thread_local! {
     static MUTATING_REPAIR_THREAD_COUNTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Internal helper to enable mutating repair for regression tests or offline maintenance.
+/// Internal helper to enable mutating repair strictly for regression tests under debug/test builds.
+/// Completely omitted and impossible to invoke in release builds.
 #[doc(hidden)]
+#[cfg(debug_assertions)]
 pub fn enable_mutating_repair_for_test(enabled: bool) {
     MUTATING_REPAIR_THREAD_COUNTER.with(|c| {
         if enabled {
@@ -389,21 +397,32 @@ pub fn repair(p: &Paths, backup: &Path) -> Result<StoreReport> {
     repair_with_proc_root(p, backup, crate::platform::process::proc_root().as_deref())
 }
 
+#[cfg(debug_assertions)]
 struct RepairLocks {
     locks: Vec<crate::platform::fs::LockGuard>,
 }
 
+#[cfg(not(debug_assertions))]
+pub fn repair_with_proc_root(
+    _p: &Paths,
+    _backup: &Path,
+    _proc_root: Option<&Path>,
+) -> Result<StoreReport> {
+    Err(Error::MaintenanceUnavailable(
+        "mutating shared-store repair is disabled in this milestone to protect database integrity against concurrent writers. Use 'store status' for read-only diagnostics.".to_string(),
+    ))
+}
+
+#[cfg(debug_assertions)]
 pub fn repair_with_proc_root(
     p: &Paths,
     backup: &Path,
     proc_root: Option<&Path>,
 ) -> Result<StoreReport> {
     // Architectural decision (Phase 1.1 Final Stabilization):
-    // Mutating shared-store repair is disabled by default for normal users to prevent
-    // active-writer hazards and data corruption. Read-only diagnostics ('store::inspect')
-    // remain fully available.
-    let allowed = MUTATING_REPAIR_THREAD_COUNTER.with(|c| c.get() > 0)
-        || std::env::var("CODEX_DOCK_ENABLE_MUTATING_REPAIR").as_deref() == Ok("1");
+    // Mutating shared-store repair is disabled by default to protect database integrity
+    // against concurrent writers. Read-only diagnostics ('store::inspect') remain fully available.
+    let allowed = MUTATING_REPAIR_THREAD_COUNTER.with(|c| c.get() > 0);
 
     if !allowed {
         return Err(Error::MaintenanceUnavailable(
