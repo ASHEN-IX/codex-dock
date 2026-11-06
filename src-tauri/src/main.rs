@@ -171,6 +171,7 @@ fn add_account(name: String, clone_from: Option<String>) -> Result<serde_json::V
 fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
     let p = Paths::real();
     let home = accounts::validate_login_target(&p, &name).map_err(|e| e.to_string())?;
+    let login_guard = accounts::acquire_login_lock(&p, &name).map_err(|e| e.to_string())?;
     {
         let state = app.state::<LoginState>();
         let mut map = state
@@ -186,11 +187,16 @@ fn start_login(name: String, app: tauri::AppHandle) -> Result<(), String> {
         }
         map.insert(name.clone(), Login::starting());
     }
-    std::thread::spawn(move || run_login(app, name, home));
+    std::thread::spawn(move || run_login(app, name, home, login_guard));
     Ok(())
 }
 
-fn run_login(app: tauri::AppHandle, name: String, home: std::path::PathBuf) {
+fn run_login(
+    app: tauri::AppHandle,
+    name: String,
+    home: std::path::PathBuf,
+    _login_guard: codex_dock_core::platform::fs::LockGuard,
+) {
     use std::io::{BufRead, BufReader};
 
     // `codex login` rewrites auth.json through a symlink. The live layout links
@@ -424,7 +430,6 @@ fn delete_account(name: String) -> Result<serde_json::Value, String> {
         }
         Err(e) => return Err(e.to_string()),
     };
-    accounts::remove_user_data_dir(&p, &name, &bak).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "moved": moved.display().to_string(),
         "backup": bak.display().to_string(),
@@ -856,6 +861,27 @@ mod tests {
 
         std::os::unix::fs::symlink(&target_outside, p.profiles.join("escaped_acc")).unwrap();
         assert!(accounts::validate_login_target(&p, "escaped_acc").is_err());
+
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn login_lifecycle_lock_synchronization() {
+        let t = tmp("login_lock");
+        let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+        std::fs::create_dir_all(&p.profiles).unwrap();
+        accounts::create(&p, "alice", None).unwrap();
+
+        // 1. Acquire login lock
+        let guard1 = accounts::acquire_login_lock(&p, "alice").unwrap();
+
+        // 2. Competing acquisition attempt fails
+        assert!(accounts::acquire_login_lock(&p, "alice").is_err());
+
+        // 3. Drop guard releases the lock
+        drop(guard1);
+        let guard2 = accounts::acquire_login_lock(&p, "alice");
+        assert!(guard2.is_ok());
 
         let _ = std::fs::remove_dir_all(&t);
     }

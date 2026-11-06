@@ -814,7 +814,25 @@ fn concurrent_create_and_remove_synchronization() {
         );
     }
 
-    // 4. When no locks are held, remove succeeds and moves to backup
+    // 4. Hold .login-test_sync.lock and verify remove refuses
+    let login_lock_path = p.profiles.join(".login-test_sync.lock");
+    {
+        let _login_guard =
+            LockGuard::try_acquire(&login_lock_path, "login for profile 'test_sync'").unwrap();
+        let remove_err = accounts::remove(&p, "test_sync", &bak).unwrap_err();
+        assert!(
+            remove_err
+                .to_string()
+                .contains("login for profile 'test_sync' is currently in progress"),
+            "remove must refuse while login lock is held: {remove_err}"
+        );
+        assert!(
+            p.profiles.join("test_sync").exists(),
+            "profile must not be removed"
+        );
+    }
+
+    // 5. When no locks are held, remove succeeds and moves to backup
     let backed_up = accounts::remove(&p, "test_sync", &bak).unwrap();
     assert!(
         !p.profiles.join("test_sync").exists(),
@@ -1112,6 +1130,124 @@ fn validate_login_target_security_checks() {
     let res = accounts::validate_login_target(&p, "managed_bob");
     assert!(res.is_ok());
     assert_eq!(res.unwrap(), p.profiles.join("managed_bob"));
+
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+#[cfg(unix)]
+fn independent_process_login_lock_refuses_concurrent_removal_and_preserves_data() {
+    let t = tmp("proc_login_sync");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+    accounts::create(&p, "worker", None).unwrap();
+
+    let udir = p.user_data_dir("worker");
+    std::fs::create_dir_all(&udir).unwrap();
+    std::fs::write(udir.join("Cookies"), "session_data").unwrap();
+    std::fs::write(p.profiles.join("worker/config.toml"), "model = \"test\"").unwrap();
+
+    let lock_path = p.profiles.join(".login-worker.lock");
+
+    // Spawn an independent child process holding flock on the login lock file
+    let script = format!(
+        "import fcntl, time, sys\n\
+         f = open('{}', 'w')\n\
+         fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n\
+         sys.stdout.write('LOCKED\\n')\n\
+         sys.stdout.flush()\n\
+         time.sleep(1.0)\n\
+         f.close()\n",
+        lock_path.display()
+    );
+
+    let mut child = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("must spawn python3 holding login lock");
+
+    use std::io::{BufRead, BufReader};
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(line.contains("LOCKED"));
+
+    let bak = t.join("backups");
+
+    // 1. While the independent process holds the login lock, remove MUST refuse
+    let remove_err = accounts::remove(&p, "worker", &bak).unwrap_err();
+    assert!(
+        remove_err
+            .to_string()
+            .contains("login for profile 'worker' is currently in progress"),
+        "expected removal refusal while login lock held: {remove_err}"
+    );
+
+    // Verify account data preservation:
+    assert!(
+        p.profiles.join("worker").is_dir(),
+        "profile must remain intact"
+    );
+    assert!(
+        p.profiles.join("worker/config.toml").is_file(),
+        "config must remain intact"
+    );
+    assert!(
+        udir.join("Cookies").is_file(),
+        "user data must remain intact"
+    );
+    assert!(!bak.exists(), "backup must not be created on refusal");
+
+    // 2. Wait for child process to finish and release the login lock
+    let status = child.wait().unwrap();
+    assert!(status.success());
+
+    // 3. After independent process releases lock, removal on Linux succeeds
+    #[cfg(target_os = "linux")]
+    {
+        let moved = accounts::remove(&p, "worker", &bak).unwrap();
+        assert!(
+            !p.profiles.join("worker").exists(),
+            "profile moved from active root"
+        );
+        assert!(!udir.exists(), "user data moved from config root");
+        assert!(moved.is_dir(), "profile preserved in backup");
+        assert!(
+            bak.join("Codex-worker-userdata/Cookies").is_file(),
+            "user data preserved in backup"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&t);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn core_removal_workflow_owns_complete_backup_operation() {
+    let t = tmp("complete_backup");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
+    std::fs::create_dir_all(&p.profiles).unwrap();
+    accounts::create(&p, "complete_acc", None).unwrap();
+
+    let udir = p.user_data_dir("complete_acc");
+    std::fs::create_dir_all(&udir).unwrap();
+    std::fs::write(udir.join("Cookies"), "user_session").unwrap();
+
+    let bak = t.join("backups");
+
+    // Single call to accounts::remove moves both profile and user data
+    let moved = accounts::remove(&p, "complete_acc", &bak).unwrap();
+    assert_eq!(moved, bak.join("complete_acc"));
+    assert!(!p.profiles.join("complete_acc").exists());
+    assert!(!udir.exists());
+
+    assert!(bak.join("complete_acc").is_dir());
+    assert!(bak.join("Codex-complete_acc-userdata/Cookies").is_file());
 
     let _ = std::fs::remove_dir_all(&t);
 }

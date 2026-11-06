@@ -161,9 +161,6 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
     let bak = p.backup_dir(&stamp());
     match accounts::remove(p, name, &bak) {
         Ok(moved) => {
-            if let Err(e) = accounts::remove_user_data_dir(p, name, &bak) {
-                eprintln!("profile moved, but window data stayed behind: {e}");
-            }
             println!("removed '{}' -> {}", name, moved.display());
             println!("backup:  {}", bak.display());
             0
@@ -189,6 +186,13 @@ fn cmd_remove(p: &Paths, name: &str) -> i32 {
 fn cmd_login(p: &Paths, name: &str) -> i32 {
     let home = match accounts::validate_login_target(p, name) {
         Ok(h) => h,
+        Err(e) => {
+            eprintln!("cannot sign in to '{name}': {e}");
+            return 1;
+        }
+    };
+    let _login_guard = match accounts::acquire_login_lock(p, name) {
+        Ok(g) => g,
         Err(e) => {
             eprintln!("cannot sign in to '{name}': {e}");
             return 1;

@@ -379,6 +379,13 @@ pub fn remove_with_proc_root(
         &format!("cannot remove: account creation for '{name}' is currently in progress"),
     )?;
 
+    // Synchronize with login: ensure no login is in progress
+    let login_lock_path = p.profiles.join(format!(".login-{name}.lock"));
+    let _login_guard = crate::platform::fs::LockGuard::try_acquire(
+        &login_lock_path,
+        &format!("cannot remove: login for profile '{name}' is currently in progress"),
+    )?;
+
     // Synchronize with launch: ensure no launch is in progress
     let launch_lock_path = from.join(".desktop-launch.lock");
     let launch_guard = crate::platform::fs::LockGuard::try_acquire(
@@ -519,6 +526,15 @@ pub fn validate_login_target(p: &Paths, name: &str) -> Result<PathBuf> {
     }
 
     Ok(target)
+}
+
+/// Acquire the cross-process per-profile login/lifecycle lock guard.
+pub fn acquire_login_lock(p: &Paths, name: &str) -> Result<crate::platform::fs::LockGuard> {
+    if !safe_segment(name) || name.starts_with('.') {
+        return Err(Error::Msg(format!("invalid account name '{name}'")));
+    }
+    let lock_path = p.profiles.join(format!(".login-{name}.lock"));
+    crate::platform::fs::LockGuard::try_acquire(&lock_path, &format!("login for profile '{name}'"))
 }
 
 /// Prepare a profile for `codex login`, keeping whatever it was signed in with.
