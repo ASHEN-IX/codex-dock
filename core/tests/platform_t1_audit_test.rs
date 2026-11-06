@@ -19,6 +19,26 @@ use codex_dock_core::paths::Paths;
 use codex_dock_core::platform::{self, Support};
 use codex_dock_core::tool;
 use codex_dock_core::windows;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let count = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}-{}",
+        std::process::id(),
+        nonce,
+        count
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 #[test]
 fn test_platform_capabilities_truthfulness() {
@@ -168,12 +188,12 @@ fn test_sqlite3_probe_and_availability() {
 
 #[test]
 fn test_profile_isolation_six_invariants_synthetic() {
-    let temp_root = std::env::temp_dir().join(format!("cd-iso-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_root);
-    std::fs::create_dir_all(&temp_root).unwrap();
+    let temp_root = unique_temp_dir("cd-iso-test");
 
     let base_dir = temp_root.join(".codex");
     let profiles_dir = temp_root.join(".codex-profiles");
+    std::fs::create_dir_all(&base_dir).unwrap();
+    std::fs::create_dir_all(&profiles_dir).unwrap();
     let p = Paths::new(&base_dir, &profiles_dir);
 
     // Invariant 1: CODEX_HOME propagation
@@ -277,9 +297,11 @@ fn test_profile_isolation_six_invariants_synthetic() {
     )
     .unwrap();
 
-    let bak = p.backup_dir("audit-test");
-    codex_dock_core::accounts::materialise_auth(&p.profiles.join("work"), &bak).unwrap();
-    codex_dock_core::accounts::materialise_auth(&p.profiles.join("personal"), &bak).unwrap();
+    let bak_work = p.backup_dir("audit-test-work");
+    let bak_personal = p.backup_dir("audit-test-personal");
+    codex_dock_core::accounts::materialise_auth(&p.profiles.join("work"), &bak_work).unwrap();
+    codex_dock_core::accounts::materialise_auth(&p.profiles.join("personal"), &bak_personal)
+        .unwrap();
 
     // Verify auth.json files are independent regular files
     let meta_work = std::fs::symlink_metadata(&work_auth).unwrap();
@@ -352,11 +374,10 @@ fn test_profile_isolation_six_invariants_synthetic() {
 
 #[test]
 fn test_storage_compatibility_safe_refusal_on_unsupported_platforms() {
-    let temp_root = std::env::temp_dir().join(format!("cd-refusal-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_root);
-    std::fs::create_dir_all(&temp_root).unwrap();
+    let temp_root = unique_temp_dir("cd-refusal-test");
 
     let p = Paths::new(temp_root.join(".codex"), temp_root.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
     std::fs::create_dir_all(&p.profiles).unwrap();
 
     let caps = platform::capabilities();
@@ -383,11 +404,10 @@ fn test_storage_compatibility_safe_refusal_on_unsupported_platforms() {
 
 #[test]
 fn test_desktop_launch_safely_refused_on_unsupported_platforms() {
-    let temp_root = std::env::temp_dir().join(format!("cd-launch-refuse-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&temp_root);
-    std::fs::create_dir_all(&temp_root).unwrap();
+    let temp_root = unique_temp_dir("cd-launch-refuse");
 
     let p = Paths::new(temp_root.join(".codex"), temp_root.join(".codex-profiles"));
+    std::fs::create_dir_all(&p.base).unwrap();
     std::fs::create_dir_all(p.profiles.join("test-account")).unwrap();
 
     let caps = platform::capabilities();

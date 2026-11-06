@@ -217,6 +217,7 @@ pub fn find_desktop(
 }
 
 /// Where `codex` normally lives when it was installed by the desktop bundle.
+#[cfg(unix)]
 const FALLBACKS: [&str; 4] = [
     "/usr/local/bin/codex",
     "/usr/bin/codex",

@@ -10,6 +10,9 @@ use crate::error::Result;
 use crate::paths::Paths;
 use crate::platform::{self, Capabilities, Support};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static AUDIT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckStatus {
@@ -239,12 +242,24 @@ pub fn audit_platform(p: &Paths) -> PlatformAudit {
 /// - Session rollout and projection isolation.
 /// - Safe refusal of unsupported shared-store operations.
 pub fn run_synthetic_isolation_check() -> Result<IsolationAudit> {
-    let temp_root = std::env::temp_dir().join(format!("cd-audit-iso-{}", std::process::id()));
+    let count = AUDIT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!(
+        "cd-audit-iso-{}-{}-{}",
+        std::process::id(),
+        nonce,
+        count
+    ));
     let _ = std::fs::remove_dir_all(&temp_root);
     std::fs::create_dir_all(&temp_root)?;
 
     let base_dir = temp_root.join(".codex");
     let profiles_dir = temp_root.join(".codex-profiles");
+    std::fs::create_dir_all(&base_dir)?;
+    std::fs::create_dir_all(&profiles_dir)?;
     let p = Paths::new(&base_dir, &profiles_dir);
 
     // 1. Verify CODEX_HOME propagation
@@ -276,9 +291,10 @@ pub fn run_synthetic_isolation_check() -> Result<IsolationAudit> {
         let auth_beta = p.profiles.join("beta").join("auth.json");
         let _ = std::fs::write(&auth_alpha, r#"{"tokens":{"account_id":"user_alpha"}}"#);
         let _ = std::fs::write(&auth_beta, r#"{"tokens":{"account_id":"user_beta"}}"#);
-        let bak = p.backup_dir("audit-test");
-        let _ = crate::accounts::materialise_auth(&p.profiles.join("alpha"), &bak);
-        let _ = crate::accounts::materialise_auth(&p.profiles.join("beta"), &bak);
+        let bak_alpha = p.backup_dir(&format!("audit-test-alpha-{count}"));
+        let bak_beta = p.backup_dir(&format!("audit-test-beta-{count}"));
+        let _ = crate::accounts::materialise_auth(&p.profiles.join("alpha"), &bak_alpha);
+        let _ = crate::accounts::materialise_auth(&p.profiles.join("beta"), &bak_beta);
 
         let (id_a, is_file_a) = match std::fs::symlink_metadata(&auth_alpha) {
             Ok(m) => (
