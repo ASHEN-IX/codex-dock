@@ -185,7 +185,9 @@ fn windows_uses_isolation_only_and_refuses_shared_store_operations() {
     std::fs::remove_dir_all(&t).ok();
 }
 
+#[allow(dead_code)]
 struct MutatingRepairScope;
+#[allow(dead_code)]
 impl MutatingRepairScope {
     fn enable() -> Self {
         store::enable_mutating_repair_for_test(true);

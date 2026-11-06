@@ -396,6 +396,10 @@ pub fn remove(p: &Paths, name: &str, backup: &Path) -> Result<PathBuf> {
         }
     }
 
+    // Release launch lock guard before moving the profile directory;
+    // on Windows NTFS, a directory containing an open file handle cannot be renamed.
+    drop(_launch_guard);
+
     std::fs::create_dir_all(backup)?;
     let to = backup.join(name);
     std::fs::rename(&from, &to)?;

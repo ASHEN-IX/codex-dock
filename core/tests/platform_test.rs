@@ -128,7 +128,9 @@ fn a_dangling_auth_symlink_reads_as_signed_out_not_as_a_dead_profile() {
     std::fs::remove_dir_all(&t).ok();
 }
 
+#[allow(dead_code)]
 struct MutatingRepairScope;
+#[allow(dead_code)]
 impl MutatingRepairScope {
     fn enable() -> Self {
         store::enable_mutating_repair_for_test(true);
