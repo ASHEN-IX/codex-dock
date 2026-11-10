@@ -27,8 +27,16 @@ impl Paths {
         self.base.parent().unwrap_or(Path::new("/"))
     }
 
+    /// One directory per operation, all under a single `codex-dock-backups`
+    /// root: every backup stays isolated (a later operation cannot overwrite
+    /// an earlier one) while the home directory gains one entry, not one per
+    /// backup.
+    pub fn backup_root(&self) -> PathBuf {
+        self.home().join("codex-dock-backups")
+    }
+
     pub fn backup_dir(&self, stamp: &str) -> PathBuf {
-        self.home().join(format!("codex-dock-backup-{stamp}"))
+        self.backup_root().join(stamp)
     }
 
     /// Codex Desktop's per-window Electron profile. Each account gets its own

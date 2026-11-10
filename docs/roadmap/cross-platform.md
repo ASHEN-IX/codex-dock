@@ -170,7 +170,7 @@ restates the Phase 1 audit so T1 has a checklist to verify per OS.
   SQLite file across N windows is exactly what the assignment excludes until
   validated.
 - Rollback rule for any future storage migration (unchanged): backups
-  `~/codex-dock-backup-<stamp>/` hold the displaced originals; repair is
+  `~/codex-dock-backups/<stamp>/` hold the displaced originals; repair is
   idempotent and displaces nothing when re-run (`repair_displaced...` test).
 
 ## 6. Staged plan, acceptance criteria

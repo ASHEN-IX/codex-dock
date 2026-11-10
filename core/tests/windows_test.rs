@@ -112,6 +112,92 @@ fn legacy_default_process_is_reused_for_the_same_named_account() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn matching_sign_in_identities_do_not_redirect_named_profile_windows() {
+    let root = std::env::temp_dir().join(format!("cd-named-windows-{}", std::process::id()));
+    let p = Paths::new(root.join(".codex"), root.join(".codex-profiles"));
+    let auth = r#"{"tokens":{"account_id":"same"}}"#;
+    for (pid, name) in [(42, "work"), (43, "third")] {
+        std::fs::create_dir_all(p.profiles.join(name)).unwrap();
+        std::fs::write(p.profiles.join(name).join("auth.json"), auth).unwrap();
+        let proc = root.join("proc").join(pid.to_string());
+        std::fs::create_dir_all(&proc).unwrap();
+        std::fs::write(
+            proc.join("cmdline"),
+            format!(
+                "/usr/lib/chatgpt/ChatGPT\0--user-data-dir={}\0",
+                p.user_data_dir(name).display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            proc.join("environ"),
+            format!("CODEX_HOME={}\0", p.profiles.join(name).display()),
+        )
+        .unwrap();
+    }
+    let got = windows::scan_running_for(&p, &root.join("proc")).unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!((got[0].pid, got[0].account.as_str()), (42, "work"));
+    assert_eq!((got[1].pid, got[1].account.as_str()), (43, "third"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_process_exiting_mid_scan_is_transient_not_a_broken_process_table() {
+    // Reading /proc/<pid>/cmdline for a pid that was reaped after read_dir
+    // listed it fails with ESRCH ("No such process"), which std reports as
+    // ErrorKind::Uncategorized. Treating that as a fatal scan error made
+    // `running`, `launch`, `remove` and `repair` fail closed on ordinary
+    // process churn. Spawn and reap children while scanning to provoke it.
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let churn = Arc::clone(&stop);
+    let churner = std::thread::spawn(move || {
+        while !churn.load(Ordering::Relaxed) {
+            let child = Command::new("true")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            if let Ok(mut c) = child {
+                let _ = c.wait();
+            }
+        }
+    });
+
+    let mut failures = Vec::new();
+    for _ in 0..300 {
+        if let Err(e) = windows::scan_running(std::path::Path::new("/proc")) {
+            failures.push(e.to_string());
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    churner.join().unwrap();
+
+    assert!(
+        failures.is_empty(),
+        "a dying process must not break the scan; {} of 300 failed, first: {}",
+        failures.len(),
+        failures[0]
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_missing_process_root_is_still_a_loud_failure() {
+    // The transient-process tolerances above must not swallow a genuinely
+    // unreadable process table: callers rely on the error to refuse.
+    let missing = std::env::temp_dir().join(format!("cd-proc-missing-{}", std::process::id()));
+    let err = windows::scan_running(&missing).unwrap_err().to_string();
+    assert!(err.contains("does not exist"), "{err}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn rewritten_electron_titles_still_detect_running_accounts_and_ignore_helpers() {
     let root = std::env::temp_dir().join(format!("cd-flat-proc-{}", std::process::id()));
     for (pid, title) in [
