@@ -6,7 +6,7 @@
 use crate::accounts;
 use crate::error::{Error, Result};
 use crate::paths::Paths;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{
     attribute_process, classify_process, is_candidate_codex_name, parse_unicode_string_buffer,
@@ -162,7 +162,7 @@ pub fn query_process_command_line(
 
     // If buffer was too small (STATUS_BUFFER_TOO_SMALL / STATUS_INFO_LENGTH_MISMATCH):
     if status != 0 && return_len > buf_bytes_len {
-        let u64_count = ((return_len as usize) + 7) / 8 + 8;
+        let u64_count = (return_len as usize).div_ceil(8) + 8;
         buf_u64.resize(u64_count, 0);
         let buf_ptr = buf_u64.as_mut_ptr() as *mut std::ffi::c_void;
         let buf_bytes_len = (buf_u64.len() * std::mem::size_of::<u64>()) as u32;
