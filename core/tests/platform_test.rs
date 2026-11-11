@@ -30,11 +30,11 @@ fn the_capability_report_matches_the_platform_it_runs_on() {
     }
     #[cfg(target_os = "macos")]
     {
-        // Links are real, but shared store is unverified, and process/window features
+        // Links are real, but shared store is unverified, and window features
         // are reported absent with a reason rather than pretending.
         assert_eq!(caps.filesystem_symlinks, Support::Yes);
         assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
-        assert!(matches!(caps.native_process_discovery, Support::No(r) if r.contains("/proc")));
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert!(matches!(caps.window_activation, Support::No(_)));
         assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }

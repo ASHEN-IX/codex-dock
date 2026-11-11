@@ -60,10 +60,7 @@ fn test_platform_capabilities_truthfulness() {
             caps.shared_store_compatibility,
             Support::No(reason) if reason.contains("not validated on macOS")
         ));
-        assert!(matches!(
-            caps.native_process_discovery,
-            Support::No(reason) if reason.contains("/proc")
-        ));
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert!(matches!(caps.window_activation, Support::No(_)));
         assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
@@ -78,7 +75,7 @@ fn test_platform_capabilities_truthfulness() {
             caps.shared_store_compatibility,
             Support::No(reason) if reason.contains("not validated on Windows")
         ));
-        assert!(matches!(caps.native_process_discovery, Support::No(_)));
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert!(matches!(caps.window_activation, Support::No(_)));
         assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }

@@ -325,6 +325,40 @@ pub fn running_for(p: &Paths, proc_root: &Path) -> Vec<WindowProc> {
     scan_running_for(p, proc_root).unwrap_or_default()
 }
 
+/// Discover running Codex Desktop processes using platform-native APIs.
+///
+/// On Linux this reads `/proc`; on macOS it uses `libproc` and `sysctl`;
+/// on Windows it uses Toolhelp32 snapshots and process querying.
+pub fn scan_running_native(p: &Paths) -> Result<Vec<WindowProc>> {
+    let report = crate::platform::process::scan_processes(p)?;
+    Ok(report
+        .processes
+        .into_iter()
+        .map(|proc| {
+            let account = match proc.attribution {
+                crate::platform::process::ProfileAttribution::Known(name) => name,
+                crate::platform::process::ProfileAttribution::Unknown => "(unknown)".to_string(),
+            };
+            let user_data_dir = proc.user_data_dir.unwrap_or_else(|| {
+                if account == "(unknown)" {
+                    PathBuf::new()
+                } else {
+                    p.user_data_dir(&account)
+                }
+            });
+            WindowProc {
+                pid: proc.pid,
+                account,
+                user_data_dir,
+            }
+        })
+        .collect())
+}
+
+pub fn running_native(p: &Paths) -> Vec<WindowProc> {
+    scan_running_native(p).unwrap_or_default()
+}
+
 /// Leave the caller's terminal session before exec.
 ///
 /// `process_group(0)` is only `setpgid(0, 0)`. On a terminal that puts the

@@ -202,7 +202,7 @@ Adapters + capability gates + Linux-parity tests + three-OS CI gates + platform 
 | **`sqlite3` System Availability** | Pre-installed (`/usr/bin/sqlite3`) | Pre-installed (`/usr/bin/sqlite3`) | **MISSING by default** (requires bundling or external winget/choco) |
 | **Filesystem Symlinks** | POSIX symlinks (`Support::Yes`) | POSIX symlinks (`Support::Yes`) | Requires Developer Mode / elevation (`Support::No`) |
 | **Shared Store Compatibility** | `Support::Yes` (validated on Linux) | `Support::No` (unvalidated multi-writer hazards) | `Support::No` (mandatory NTFS locking & no unprivileged file symlinks) |
-| **Native Process Discovery** | `Support::Yes` (`/proc` procfs) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
+| **Native Process Discovery** | `Support::Yes` (`/proc` procfs) | `Support::Yes` (`libproc` & `sysctl`) | `Support::Yes` (Win32 Toolhelp32 & `QueryFullProcessImageNameW`) |
 | **Window Activation** | `Support::Yes` (KWin / wmctrl) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
 | **Safe Desktop Launch** | `Support::Yes` (direct spawn + procfs sync) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
 
@@ -275,11 +275,21 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
 - **Maintain Invariants:** Keep Windows and macOS in isolation-only mode throughout Phase T2. Ensure all 6 isolation invariants remain strictly enforced.
 
 ### T2 — Native process enumeration where it is worth it
-Only after T1: macOS (NSWorkspace / `ps` fallback) and Windows
-(`NtQuerySystemInformation` or `EnumProcesses`) to enable dedup-launch and
-focus. Behind `platform::process`, capability still refused until tests pass
-on native CI.
-Acceptance: `running` finds a launched window on the OS; `launch` deduplicates.
+
+#### T2.1 — Native Process Discovery (Windows & macOS)
+**Status:** Completed native process discovery on Windows and macOS.
+- **Windows Implementation:** Documented Win32 APIs: `CreateToolhelp32Snapshot`, `Process32FirstW`, `Process32NextW`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, and `QueryFullProcessImageNameW`. Dynamic resolution of `NtQueryInformationProcess(ProcessCommandLineInformation = 60)` for reading remote command-line arguments without elevation.
+- **macOS Implementation:** Native `libproc` (`proc_listpids`, `proc_pidpath`) and `sysctl(KERN_PROCARGS2)` for `argv` and `env` extraction. Identifies `.app` bundles (`/Codex.app/Contents/MacOS/Codex`).
+- **Safety & Attribution Invariants:**
+  - Process explicitly attributed as `ProfileAttribution::Known` only when `--user-data-dir` or `CODEX_HOME` matches a verified managed profile.
+  - Candidate Codex processes with missing, unreadable, or unmanaged arguments are classified as `ProfileAttribution::Unknown` (NEVER falsely assigned to "default" or arbitrary accounts).
+  - Explicit discovery outcomes: `ManagedProfile`, `UnknownProfile`, `NoCodexProcess`, `InspectionIncompleteOrDenied`, and `Unsupported`.
+  - Process churn, rapid exit (`ESRCH` / `ERROR_INVALID_PARAMETER`), and permission barriers (`EPERM` / `ERROR_ACCESS_DENIED`) handled gracefully without false scan failure or data leaks.
+  - Capability `native_process_discovery` enabled (`Support::Yes`) on Linux, macOS, and Windows.
+  - Profile removal and desktop launching remain safely gated and disabled until independently verified in T2.2.
+
+#### T2.2 (Future milestone) — Native Window Activation & Desktop Launch Deduplication
+Pending window activation (Cocoa / Win32) and verified safe launch deduplication.
 
 ### T3 — Linking enablement per OS (shared store)
 Windows only if symlink privilege is validated (Developer Mode test); macOS
