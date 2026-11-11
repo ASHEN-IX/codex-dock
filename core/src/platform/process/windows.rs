@@ -1,15 +1,17 @@
-//! Windows native process discovery using Toolhelp32 snapshot and QueryFullProcessImageNameW.
+//! Windows native process discovery using Toolhelp32 snapshot, QueryFullProcessImageNameW,
+//! NtQueryInformationProcess(ProcessCommandLineInformation), and CommandLineToArgvW.
 
 #![allow(non_snake_case, non_camel_case_types)]
 
 use crate::accounts;
 use crate::error::{Error, Result};
 use crate::paths::Paths;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{
-    attribute_process, is_candidate_codex_name, is_electron_helper, DiscoveredProcess,
-    ProcessDiscoveryReport, ProfileAttribution,
+    attribute_process, classify_process, is_candidate_codex_name, parse_unicode_string_buffer,
+    parse_windows_command_line_msdn, DiscoveredProcess, ProcessDiscoveryReport, ProcessIdentity,
+    ProfileAttribution,
 };
 
 const TH32CS_SNAPPROCESS: u32 = 0x00000002;
@@ -19,6 +21,7 @@ const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 
 const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_NOT_FOUND: u32 = 1168;
 
 #[repr(C)]
 struct PROCESSENTRY32W {
@@ -82,6 +85,11 @@ extern "system" {
         hModule: *mut std::ffi::c_void,
         lpProcName: *const u8,
     ) -> *mut std::ffi::c_void;
+
+    #[cfg(windows)]
+    fn CommandLineToArgvW(lpCmdLine: *const u16, pNumArgs: *mut i32) -> *mut *mut u16;
+    #[cfg(windows)]
+    fn LocalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
 
 type FnNtQueryInformationProcess = unsafe extern "system" fn(
@@ -122,7 +130,7 @@ fn resolve_nt_query_information_process() -> Option<FnNtQueryInformationProcess>
 }
 
 /// Query command-line string for a process using `ProcessCommandLineInformation` (class 60).
-fn query_process_command_line(
+pub fn query_process_command_line(
     h_process: *mut std::ffi::c_void,
     nt_query: Option<FnNtQueryInformationProcess>,
 ) -> Option<String> {
@@ -131,90 +139,97 @@ fn query_process_command_line(
     // Class 60 is ProcessCommandLineInformation (supported on Windows 8.1 / 10 / 11)
     const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
 
-    let mut buf = vec![0u8; 4096];
+    // Allocate an 8-byte aligned buffer using Vec<u64>:
+    let mut buf_u64 = vec![0u64; 512]; // 4096 bytes
     let mut return_len: u32 = 0;
+
+    let buf_ptr = buf_u64.as_mut_ptr() as *mut std::ffi::c_void;
+    let buf_bytes_len = (buf_u64.len() * std::mem::size_of::<u64>()) as u32;
 
     let mut status = unsafe {
         query_fn(
             h_process,
             PROCESS_COMMAND_LINE_INFORMATION,
-            buf.as_mut_ptr() as *mut std::ffi::c_void,
-            buf.len() as u32,
+            buf_ptr,
+            buf_bytes_len,
             &mut return_len,
         )
     };
 
     // If buffer was too small (STATUS_BUFFER_TOO_SMALL / STATUS_INFO_LENGTH_MISMATCH):
-    if status != 0 && return_len > buf.len() as u32 {
-        buf.resize(return_len as usize, 0);
+    if status != 0 && return_len > buf_bytes_len {
+        let u64_count = ((return_len as usize) + 7) / 8 + 8;
+        buf_u64.resize(u64_count, 0);
+        let buf_ptr = buf_u64.as_mut_ptr() as *mut std::ffi::c_void;
+        let buf_bytes_len = (buf_u64.len() * std::mem::size_of::<u64>()) as u32;
         status = unsafe {
             query_fn(
                 h_process,
                 PROCESS_COMMAND_LINE_INFORMATION,
-                buf.as_mut_ptr() as *mut std::ffi::c_void,
-                buf.len() as u32,
+                buf_ptr,
+                buf_bytes_len,
                 &mut return_len,
             )
         };
     }
 
-    if status != 0 || return_len < 8 {
+    if status != 0 {
         return None;
     }
 
-    // Layout of UNICODE_STRING returned:
-    // Length: u16 (bytes)
-    // MaximumLength: u16 (bytes)
-    // Buffer: *mut u16
-    let len_bytes = u16::from_ne_bytes(buf[0..2].try_into().ok()?) as usize;
-    let char_count = len_bytes / 2;
-    if char_count == 0 {
-        return None;
-    }
+    let byte_len = (return_len as usize).min(buf_u64.len() * std::mem::size_of::<u64>());
+    let byte_slice: &[u8] =
+        unsafe { std::slice::from_raw_parts(buf_u64.as_ptr() as *const u8, byte_len) };
 
-    // Pointer offset:
-    // In 64-bit systems, Buffer is at offset 8; in 32-bit, at offset 4.
-    // The actual UTF-16 characters follow the UNICODE_STRING header in the buffer.
-    let header_size = if std::mem::size_of::<usize>() == 8 {
-        16
-    } else {
-        8
-    };
-    if buf.len() >= header_size + len_bytes {
-        let u16_slice = unsafe {
-            std::slice::from_raw_parts(buf[header_size..].as_ptr() as *const u16, char_count)
-        };
-        return Some(String::from_utf16_lossy(u16_slice));
-    }
-
-    None
+    parse_unicode_string_buffer(byte_slice)
 }
 
-/// Tokenize a Windows command line into arguments respecting double quotes.
-fn parse_windows_command_line(cmd: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
+#[cfg(windows)]
+pub fn parse_windows_command_line_native(cmd: &str) -> Vec<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-    for ch in cmd.chars() {
-        match ch {
-            '"' => {
-                in_quotes = !in_quotes;
+    let wide: Vec<u16> = std::ffi::OsStr::new(cmd)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut num_args: i32 = 0;
+    let argv_ptr = unsafe { CommandLineToArgvW(wide.as_ptr(), &mut num_args) };
+    if argv_ptr.is_null() || num_args <= 0 {
+        return Vec::new();
+    }
+
+    let mut args = Vec::with_capacity(num_args as usize);
+    for i in 0..num_args as usize {
+        let arg_ptr = unsafe { *argv_ptr.add(i) };
+        if !arg_ptr.is_null() {
+            let mut len = 0;
+            while unsafe { *arg_ptr.add(len) } != 0 {
+                len += 1;
             }
-            ' ' | '\t' if !in_quotes => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
-                }
-            }
-            _ => {
-                current.push(ch);
-            }
+            let slice = unsafe { std::slice::from_raw_parts(arg_ptr, len) };
+            let s = OsString::from_wide(slice).to_string_lossy().into_owned();
+            args.push(s);
         }
     }
-    if !current.is_empty() {
-        args.push(current);
+
+    unsafe {
+        LocalFree(argv_ptr as *mut std::ffi::c_void);
     }
+
     args
+}
+
+pub fn parse_windows_command_line(cmd: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        parse_windows_command_line_native(cmd)
+    }
+    #[cfg(not(windows))]
+    {
+        parse_windows_command_line_msdn(cmd)
+    }
 }
 
 pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
@@ -234,6 +249,7 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
 
     let mut processes = Vec::new();
     let mut warnings = Vec::new();
+    let mut is_complete = true;
 
     let mut ok = unsafe { Process32FirstW(snap_guard.raw(), &mut entry) };
     while ok != 0 {
@@ -280,14 +296,21 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
                         .map(parse_windows_command_line)
                         .unwrap_or_default();
 
-                    if !is_electron_helper(&exe_name, &args) {
+                    let identity =
+                        classify_process(exe_path.as_deref(), &exe_name, &args, configured_desktop);
+
+                    if identity != ProcessIdentity::ElectronHelper
+                        && identity != ProcessIdentity::Cli
+                        && identity != ProcessIdentity::NonCodex
+                    {
                         let user_data_dir = super::extract_user_data_dir(&args);
                         let attribution =
-                            attribute_process(user_data_dir.as_deref(), None, &managed);
+                            attribute_process(p, user_data_dir.as_deref(), None, &managed);
 
                         processes.push(DiscoveredProcess {
                             pid,
                             exe_path,
+                            identity,
                             attribution,
                             user_data_dir,
                         });
@@ -298,17 +321,21 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
                         warnings.push(format!(
                             "access denied opening candidate Codex process pid {pid}"
                         ));
+                        is_complete = false;
                         processes.push(DiscoveredProcess {
                             pid,
                             exe_path: None,
+                            identity: ProcessIdentity::CandidateDesktop,
                             attribution: ProfileAttribution::Unknown,
                             user_data_dir: None,
                         });
-                    } else if err != ERROR_INVALID_PARAMETER {
-                        // ERROR_INVALID_PARAMETER (87) is process termination during scan
+                    } else if err != ERROR_INVALID_PARAMETER && err != ERROR_NOT_FOUND {
+                        // Ordinary process-exit churn (87, 1168) does not indicate permission failure.
+                        // Other unexpected errors are recorded:
                         warnings.push(format!(
                             "error opening candidate process pid {pid}: code {err}"
                         ));
+                        is_complete = false;
                     }
                 }
             }
@@ -322,5 +349,6 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
     Ok(ProcessDiscoveryReport {
         processes,
         warnings,
+        is_complete,
     })
 }

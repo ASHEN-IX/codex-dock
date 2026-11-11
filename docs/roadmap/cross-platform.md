@@ -55,7 +55,7 @@ Every platform-sensitive operation in the tree, and where it lives now:
   |---|---|---|---|
   | `filesystem_symlinks` | Yes | Yes (POSIX symlinks available) | No (needs Developer Mode / elevation) |
   | `shared_store_compatibility` | Yes (validated on Linux) | No (unvalidated runtime; profiles stay isolated) | No (unvalidated runtime; profiles stay isolated) |
-  | `native_process_discovery` | Yes (procfs `/proc`) | No (macOS native process scanning not implemented yet) | No (Win32 process discovery not implemented yet) |
+  | `native_process_discovery` | Yes (procfs `/proc`) | Yes (native `libproc` & `sysctl`; synthetic verified, real desktop unverified) | Yes (Win32 Toolhelp32 & `QueryFullProcessImageNameW`; synthetic verified, real desktop unverified) |
   | `window_activation` | Yes (KWin/wmctrl) | No (not implemented yet) | No (not implemented yet) |
   | `safe_desktop_launch` | Yes (verified desktop exec) | No (macOS app bundle launch not implemented yet) | No (Windows process launch & escaping not implemented yet) |
 
@@ -278,15 +278,18 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
 
 #### T2.1 — Native Process Discovery (Windows & macOS)
 **Status:** Completed native process discovery on Windows and macOS.
-- **Windows Implementation:** Documented Win32 APIs: `CreateToolhelp32Snapshot`, `Process32FirstW`, `Process32NextW`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, and `QueryFullProcessImageNameW`. Dynamic resolution of `NtQueryInformationProcess(ProcessCommandLineInformation = 60)` for reading remote command-line arguments without elevation.
-- **macOS Implementation:** Native `libproc` (`proc_listpids`, `proc_pidpath`) and `sysctl(KERN_PROCARGS2)` for `argv` and `env` extraction. Identifies `.app` bundles (`/Codex.app/Contents/MacOS/Codex`).
+- **Windows Implementation:** Documented Win32 APIs: `CreateToolhelp32Snapshot`, `Process32FirstW`, `Process32NextW`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, and `QueryFullProcessImageNameW`. Dynamic resolution of `NtQueryInformationProcess(ProcessCommandLineInformation = 60)` with memory-safe `UNICODE_STRING` buffer validation and `CommandLineToArgvW` / MSDN parsing.
+- **macOS Implementation:** Native `libproc` (`proc_listpids`, `proc_pidpath`, `proc_name`) and `sysctl(KERN_PROCARGS2)` for `argv` and `env` extraction. Identifies `.app` bundles (`/Codex.app/Contents/MacOS/Codex`).
 - **Safety & Attribution Invariants:**
-  - Process explicitly attributed as `ProfileAttribution::Known` only when `--user-data-dir` or `CODEX_HOME` matches a verified managed profile.
+  - Strict profile attribution: processes are matched against the full expected path returned by `Paths::user_data_dir()`, normalizing slashes, Windows case-insensitivity, and verbatim prefixes. Matching basenames alone (e.g. `/tmp/unrelated/Codex-<name>`) are strictly rejected.
+  - Rejection of conflicting evidence: processes with conflicting `CODEX_HOME` and `--user-data-dir` are safely categorized as `ProfileAttribution::Unknown`.
+  - Incomplete scan semantics: permission denials and relevant inspection failures prevent false `NoCodexProcess` outcomes; `query_account` returns `InspectionIncompleteOrDenied`.
+  - CLI vs Desktop distinction: standalone Codex CLI commands (`codex login`, `codex exec`) and Electron helpers are cleanly distinguished from Codex Desktop.
   - Candidate Codex processes with missing, unreadable, or unmanaged arguments are classified as `ProfileAttribution::Unknown` (NEVER falsely assigned to "default" or arbitrary accounts).
   - Explicit discovery outcomes: `ManagedProfile`, `UnknownProfile`, `NoCodexProcess`, `InspectionIncompleteOrDenied`, and `Unsupported`.
   - Process churn, rapid exit (`ESRCH` / `ERROR_INVALID_PARAMETER`), and permission barriers (`EPERM` / `ERROR_ACCESS_DENIED`) handled gracefully without false scan failure or data leaks.
   - Capability `native_process_discovery` enabled (`Support::Yes`) on Linux, macOS, and Windows.
-  - Profile removal and desktop launching remain safely gated and disabled until independently verified in T2.2.
+  - Verification Scope: CI tests verify synthetic helper processes and native OS discovery mechanics; proprietary official Codex Desktop runtime behavior remains unverified on Windows/macOS. Profile removal, desktop launching, and shared store remain safely gated and disabled until independently verified.
 
 #### T2.2 (Future milestone) — Native Window Activation & Desktop Launch Deduplication
 Pending window activation (Cocoa / Win32) and verified safe launch deduplication.

@@ -6,8 +6,8 @@ use crate::paths::Paths;
 use std::path::{Path, PathBuf};
 
 use super::{
-    attribute_process, is_candidate_codex_name, is_electron_helper, DiscoveredProcess,
-    ProcessDiscoveryReport, ProfileAttribution,
+    attribute_process, classify_process, is_candidate_codex_name, DiscoveredProcess,
+    ProcessDiscoveryReport, ProcessIdentity, ProfileAttribution,
 };
 
 const PROC_ALL_PIDS: u32 = 1;
@@ -30,6 +30,8 @@ extern "C" {
 
     fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
 
+    fn proc_name(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
+
     fn sysctl(
         name: *const i32,
         namelen: u32,
@@ -51,7 +53,6 @@ fn list_all_pids() -> Result<Vec<i32>> {
     }
 
     let count = (bytes_needed as usize) / std::mem::size_of::<i32>();
-    // Allocate extra capacity to handle new processes created between queries:
     let mut pids: Vec<i32> = vec![0; count + 64];
     let buffer_size = (pids.len() * std::mem::size_of::<i32>()) as i32;
 
@@ -74,6 +75,23 @@ fn list_all_pids() -> Result<Vec<i32>> {
     pids.truncate(actual_count);
     pids.retain(|&pid| pid > 0);
     Ok(pids)
+}
+
+/// Query short process name via `proc_name`.
+fn query_proc_name(pid: i32) -> Option<String> {
+    let mut buf = [0u8; 1024];
+    let ret = unsafe {
+        proc_name(
+            pid,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            buf.len() as u32,
+        )
+    };
+    if ret <= 0 {
+        return None;
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(ret as usize);
+    Some(String::from_utf8_lossy(&buf[..len]).into_owned())
 }
 
 /// Query full executable path for a PID via `proc_pidpath`.
@@ -195,6 +213,7 @@ fn is_codex_app_bundle(path: &Path) -> bool {
     let lossy = path.to_string_lossy();
     lossy.contains("/Codex.app/Contents/MacOS/")
         || lossy.contains("/ChatGPT.app/Contents/MacOS/")
+        || lossy.contains("/Codex Desktop.app/Contents/MacOS/")
         || lossy.contains("codex-desktop")
 }
 
@@ -206,13 +225,31 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
 
     let mut processes = Vec::new();
     let mut warnings = Vec::new();
+    let mut is_complete = true;
 
     for pid in pids {
         let exe_path = match query_pid_path(pid) {
             Ok(Some(path)) => path,
-            Ok(None) => continue, // exited mid-scan
+            Ok(None) => continue, // exited mid-scan: ordinary churn
             Err(e) if e.raw_os_error() == Some(EPERM) || e.raw_os_error() == Some(EACCES) => {
-                // Cannot inspect path; this is normal for other user's processes
+                // If permission is denied querying path, check proc_name for candidate identity:
+                if let Some(short_name) = query_proc_name(pid) {
+                    if is_candidate_codex_name(&short_name)
+                        || configured_desktop == Some(short_name.as_str())
+                    {
+                        warnings.push(format!(
+                            "permission denied reading path for candidate process pid {pid}"
+                        ));
+                        is_complete = false;
+                        processes.push(DiscoveredProcess {
+                            pid: pid as u32,
+                            exe_path: None,
+                            identity: ProcessIdentity::CandidateDesktop,
+                            attribution: ProfileAttribution::Unknown,
+                            user_data_dir: None,
+                        });
+                    }
+                }
                 continue;
             }
             Err(_) => continue,
@@ -232,17 +269,19 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
         let (args, envs) = match query_proc_args(pid) {
             Ok(pair) => pair,
             Err(e) if e.raw_os_error() == Some(ESRCH) => {
-                // Process terminated during scan
+                // Process terminated during scan: routine churn
                 continue;
             }
             Err(e) if e.raw_os_error() == Some(EPERM) || e.raw_os_error() == Some(EACCES) => {
                 // Candidate Codex process exists, but permission denied inspecting command line
                 warnings.push(format!(
-                    "permission denied inspecting command-line arguments for candidate Codex process pid {pid}: {e}"
+                    "permission denied inspecting command-line arguments for candidate Codex process pid {pid}"
                 ));
+                is_complete = false;
                 processes.push(DiscoveredProcess {
                     pid: pid as u32,
                     exe_path: Some(exe_path),
+                    identity: ProcessIdentity::CandidateDesktop,
                     attribution: ProfileAttribution::Unknown,
                     user_data_dir: None,
                 });
@@ -252,9 +291,11 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
                 warnings.push(format!(
                     "error reading arguments for candidate Codex process pid {pid}: {e}"
                 ));
+                is_complete = false;
                 processes.push(DiscoveredProcess {
                     pid: pid as u32,
                     exe_path: Some(exe_path),
+                    identity: ProcessIdentity::CandidateDesktop,
                     attribution: ProfileAttribution::Unknown,
                     user_data_dir: None,
                 });
@@ -262,7 +303,11 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
             }
         };
 
-        if is_electron_helper(file_name, &args) {
+        let identity = classify_process(Some(&exe_path), file_name, &args, configured_desktop);
+        if identity == ProcessIdentity::ElectronHelper
+            || identity == ProcessIdentity::Cli
+            || identity == ProcessIdentity::NonCodex
+        {
             continue;
         }
 
@@ -273,11 +318,12 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
             .map(PathBuf::from);
 
         let attribution =
-            attribute_process(user_data_dir.as_deref(), codex_home.as_deref(), &managed);
+            attribute_process(p, user_data_dir.as_deref(), codex_home.as_deref(), &managed);
 
         processes.push(DiscoveredProcess {
             pid: pid as u32,
             exe_path: Some(exe_path),
+            identity,
             attribution,
             user_data_dir,
         });
@@ -287,5 +333,6 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
     Ok(ProcessDiscoveryReport {
         processes,
         warnings,
+        is_complete,
     })
 }

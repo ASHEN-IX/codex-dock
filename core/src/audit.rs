@@ -76,7 +76,10 @@ pub struct IsolationAudit {
 pub struct ProcessDiscoveryAudit {
     pub status: CheckStatus,
     pub method: String,
+    pub scan_completed: bool,
     pub running_processes_count: usize,
+    pub confirmed_desktop_count: usize,
+    pub candidate_desktop_count: usize,
     pub confident_profile_count: usize,
     pub unknown_profile_count: usize,
     pub restrictions: Vec<String>,
@@ -220,10 +223,39 @@ pub fn audit_platform(p: &Paths) -> PlatformAudit {
 
     // 7. Native Process Discovery Audit
     let discovery_supported = matches!(capabilities.native_process_discovery, Support::Yes);
-    let (disc_status, proc_count, conf_count, unk_count, restrictions) = if discovery_supported {
+    let (
+        disc_status,
+        scan_completed,
+        proc_count,
+        confirmed_count,
+        candidate_count,
+        conf_count,
+        unk_count,
+        restrictions,
+    ) = if discovery_supported {
         match platform::process::scan_processes(p) {
             Ok(report) => {
                 let proc_count = report.processes.len();
+                let confirmed_count = report
+                    .processes
+                    .iter()
+                    .filter(|proc| {
+                        matches!(
+                            proc.identity,
+                            platform::process::ProcessIdentity::ConfirmedDesktop
+                        )
+                    })
+                    .count();
+                let candidate_count = report
+                    .processes
+                    .iter()
+                    .filter(|proc| {
+                        matches!(
+                            proc.identity,
+                            platform::process::ProcessIdentity::CandidateDesktop
+                        )
+                    })
+                    .count();
                 let conf_count = report
                     .processes
                     .iter()
@@ -246,17 +278,32 @@ pub fn audit_platform(p: &Paths) -> PlatformAudit {
                     .count();
                 (
                     CheckStatus::Pass,
+                    report.is_complete,
                     proc_count,
+                    confirmed_count,
+                    candidate_count,
                     conf_count,
                     unk_count,
                     report.warnings,
                 )
             }
-            Err(e) => (CheckStatus::Fail, 0, 0, 0, vec![format!("scan error: {e}")]),
+            Err(e) => (
+                CheckStatus::Fail,
+                false,
+                0,
+                0,
+                0,
+                0,
+                0,
+                vec![format!("scan error: {e}")],
+            ),
         }
     } else {
         (
             CheckStatus::Blocked("native process discovery unsupported on this platform"),
+            false,
+            0,
+            0,
             0,
             0,
             0,
@@ -267,11 +314,14 @@ pub fn audit_platform(p: &Paths) -> PlatformAudit {
     let process_discovery_audit = ProcessDiscoveryAudit {
         status: disc_status,
         method: platform::process::discovery_method().to_string(),
+        scan_completed,
         running_processes_count: proc_count,
+        confirmed_desktop_count: confirmed_count,
+        candidate_desktop_count: candidate_count,
         confident_profile_count: conf_count,
         unknown_profile_count: unk_count,
         restrictions,
-        synthetic_vs_real_note: "Synthetic tests verify native process enumeration, exit races, and isolation; real Codex Desktop launch and window control remain unverified and gated behind safe_desktop_launch.".to_string(),
+        synthetic_vs_real_note: "Synthetic tests verify native process discovery, helper-process filtering, and error handling; official proprietary Codex Desktop application launch and runtime behavior remain unverified and gated behind safe_desktop_launch.".to_string(),
     };
 
     // 8. Desktop Runtime Status
@@ -571,11 +621,21 @@ pub fn format_audit_report(audit: &PlatformAudit) -> String {
         audit.process_discovery_audit.method
     ));
     out.push_str(&format!(
-        "  Running Codex Processes:         {}\n",
-        audit.process_discovery_audit.running_processes_count
+        "  Scan Completion:                 {}\n",
+        if audit.process_discovery_audit.scan_completed {
+            "COMPLETE"
+        } else {
+            "INCOMPLETE (inspection denied or restricted)"
+        }
     ));
     out.push_str(&format!(
-        "  Profile Association Confidence:  {} confident, {} unknown\n",
+        "  Running Codex Processes:         {} ({} confirmed desktop, {} candidate)\n",
+        audit.process_discovery_audit.running_processes_count,
+        audit.process_discovery_audit.confirmed_desktop_count,
+        audit.process_discovery_audit.candidate_desktop_count
+    ));
+    out.push_str(&format!(
+        "  Profile Association:             {} confident, {} unknown\n",
         audit.process_discovery_audit.confident_profile_count,
         audit.process_discovery_audit.unknown_profile_count
     ));

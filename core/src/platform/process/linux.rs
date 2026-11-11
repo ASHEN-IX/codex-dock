@@ -6,8 +6,8 @@ use crate::paths::Paths;
 use std::path::{Path, PathBuf};
 
 use super::{
-    attribute_process, is_candidate_codex_name, is_electron_helper, DiscoveredProcess,
-    ProcessDiscoveryReport,
+    attribute_process, classify_process, is_candidate_codex_name, DiscoveredProcess,
+    ProcessDiscoveryReport, ProcessIdentity, ProfileAttribution,
 };
 
 const ESRCH: i32 = 3;
@@ -52,7 +52,8 @@ pub fn scan_processes_at(p: &Paths, proc_root: &Path) -> Result<ProcessDiscovery
     let configured_desktop = desktop.file_name().and_then(|s| s.to_str());
 
     let mut processes = Vec::new();
-    let warnings = Vec::new();
+    let mut warnings = Vec::new();
+    let mut is_complete = true;
 
     for entry in rd {
         let entry = entry.map_err(|e| {
@@ -77,9 +78,17 @@ pub fn scan_processes_at(p: &Paths, proc_root: &Path) -> Result<ProcessDiscovery
                 let comm_trimmed = comm.trim();
                 if is_candidate_codex_name(comm_trimmed) || configured_desktop == Some(comm_trimmed)
                 {
-                    return Err(Error::Msg(format!(
-                        "permission denied inspecting candidate Codex process pid {pid}: {e}"
-                    )));
+                    warnings.push(format!(
+                        "permission denied inspecting candidate Codex process pid {pid}"
+                    ));
+                    is_complete = false;
+                    processes.push(DiscoveredProcess {
+                        pid,
+                        exe_path: None,
+                        identity: ProcessIdentity::CandidateDesktop,
+                        attribution: ProfileAttribution::Unknown,
+                        user_data_dir: None,
+                    });
                 }
                 continue;
             }
@@ -112,8 +121,11 @@ pub fn scan_processes_at(p: &Paths, proc_root: &Path) -> Result<ProcessDiscovery
             .and_then(|s| s.to_str())
             .unwrap_or("");
 
-        let is_candidate = is_candidate_codex_name(bin) || configured_desktop == Some(bin);
-        if !is_candidate || is_electron_helper(bin, &args) {
+        let identity = classify_process(Some(Path::new(exe)), bin, &args, configured_desktop);
+        if identity == ProcessIdentity::ElectronHelper
+            || identity == ProcessIdentity::Cli
+            || identity == ProcessIdentity::NonCodex
+        {
             continue;
         }
 
@@ -127,11 +139,12 @@ pub fn scan_processes_at(p: &Paths, proc_root: &Path) -> Result<ProcessDiscovery
             .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()));
 
         let attribution =
-            attribute_process(user_data_dir.as_deref(), codex_home.as_deref(), &managed);
+            attribute_process(p, user_data_dir.as_deref(), codex_home.as_deref(), &managed);
 
         processes.push(DiscoveredProcess {
             pid,
             exe_path: Some(PathBuf::from(exe)),
+            identity,
             attribution,
             user_data_dir,
         });
@@ -141,5 +154,6 @@ pub fn scan_processes_at(p: &Paths, proc_root: &Path) -> Result<ProcessDiscovery
     Ok(ProcessDiscoveryReport {
         processes,
         warnings,
+        is_complete,
     })
 }
