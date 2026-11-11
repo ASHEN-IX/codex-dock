@@ -710,26 +710,25 @@ fn crashed_startup_allows_subsequent_retry_to_succeed() {
 }
 
 #[test]
+#[cfg(unix)]
 fn profile_symlink_escape_is_rejected() {
     let (paths, tmp) = setup_test_env("symlink-escape");
     let outside_dir = tmp.path().join("outside");
     fs::create_dir_all(&outside_dir).unwrap();
 
-    #[cfg(unix)]
-    {
-        let symlink_path = paths.profiles.join("escaped");
-        std::os::unix::fs::symlink(&outside_dir, &symlink_path).unwrap();
+    let symlink_path = paths.profiles.join("escaped");
+    std::os::unix::fs::symlink(&outside_dir, &symlink_path).unwrap();
 
-        let opts = LaunchOptions::synthetic_test(None);
-        let err = launch_desktop_with_options(&paths, "escaped", &opts).unwrap_err();
-        assert!(
-            err.to_string().contains("escapes managed profiles root"),
-            "expected profile escape rejection, got: {err}"
-        );
-    }
+    let opts = LaunchOptions::synthetic_test(None);
+    let err = launch_desktop_with_options(&paths, "escaped", &opts).unwrap_err();
+    assert!(
+        err.to_string().contains("escapes managed profiles root"),
+        "expected profile escape rejection, got: {err}"
+    );
 }
 
 #[test]
+#[cfg(unix)]
 fn repair_lock_error_is_not_silently_ignored() {
     let (paths, _tmp) = setup_test_env("repair-lock-error");
     create_mock_account(&paths, "work");
@@ -737,24 +736,21 @@ fn repair_lock_error_is_not_silently_ignored() {
     let repair_lock = paths.base.join(".dock-repair.lock");
     fs::write(&repair_lock, "corrupt").unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&repair_lock).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&repair_lock, perms.clone()).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&repair_lock).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&repair_lock, perms.clone()).unwrap();
 
-        let opts = LaunchOptions::synthetic_test(None);
-        let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
-        assert!(
-            err.to_string().contains("cannot verify repair lock"),
-            "expected repair lock verification error, got: {err}"
-        );
+    let opts = LaunchOptions::synthetic_test(None);
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
+    assert!(
+        err.to_string().contains("cannot verify repair lock"),
+        "expected repair lock verification error, got: {err}"
+    );
 
-        // restore permissions for cleanup
-        perms.set_mode(0o600);
-        let _ = fs::set_permissions(&repair_lock, perms);
-    }
+    // restore permissions for cleanup
+    perms.set_mode(0o600);
+    let _ = fs::set_permissions(&repair_lock, perms);
 }
 
 #[test]
