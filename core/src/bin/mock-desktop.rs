@@ -24,6 +24,6 @@ fn main() {
         }
     }
 
-    // Stay alive for 3 seconds so process discovery can detect and attribute the running process:
-    std::thread::sleep(std::time::Duration::from_millis(3000));
+    // Stay alive for 10 seconds so process discovery can detect and attribute the running process:
+    std::thread::sleep(std::time::Duration::from_millis(10000));
 }

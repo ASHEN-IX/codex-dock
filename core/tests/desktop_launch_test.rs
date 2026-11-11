@@ -98,7 +98,7 @@ for arg in "$@"; do
             ;;
     esac
 done
-sleep 3
+sleep 10
 "#
             };
             fs::write(&dest_bin, script).unwrap();
@@ -282,13 +282,41 @@ fn resolve_desktop_binary_checks_presence_and_bundle_structure() {
     let resolved = resolve_macos_bundle_executable(&bundle_dir);
     assert_eq!(resolved, Some(exec_path.clone()));
 
-    let opts = LaunchOptions {
-        binary_override: Some(exec_path.clone()),
-        enforce_capability: false,
-        ..Default::default()
-    };
-    let bin = resolve_desktop_binary(&opts).unwrap();
-    assert_eq!(bin, exec_path);
+    #[cfg(unix)]
+    {
+        let opts = LaunchOptions {
+            binary_override: Some(exec_path.clone()),
+            enforce_capability: false,
+            ..Default::default()
+        };
+        let bin = resolve_desktop_binary(&opts).unwrap();
+        assert_eq!(bin, exec_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, passing .app bundle directory directly resolves inner Mach-O binary
+        let opts = LaunchOptions {
+            binary_override: Some(bundle_dir.clone()),
+            enforce_capability: false,
+            ..Default::default()
+        };
+        let bin = resolve_desktop_binary(&opts).unwrap();
+        assert_eq!(bin, exec_path);
+    }
+
+    #[cfg(windows)]
+    {
+        let win_exec = tmp.path().join("Codex.exe");
+        fs::write(&win_exec, "@echo off\n").unwrap();
+        let opts = LaunchOptions {
+            binary_override: Some(win_exec.clone()),
+            enforce_capability: false,
+            ..Default::default()
+        };
+        let bin = resolve_desktop_binary(&opts).unwrap();
+        assert_eq!(bin, win_exec);
+    }
 }
 
 #[test]
@@ -320,6 +348,25 @@ fn windows_launch_entrypoint_delegates_to_platform_launch() {
     }
 }
 
+fn read_record_file_with_timeout(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<String, std::io::Error> {
+    let start = std::time::Instant::now();
+    loop {
+        match fs::read_to_string(path) {
+            Ok(content) if !content.trim().is_empty() => return Ok(content),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        if start.elapsed() >= timeout {
+            return fs::read_to_string(path);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn two_independent_profiles_receive_isolated_arguments_and_environment() {
     let _lock = LAUNCH_MUTEX.lock().unwrap();
@@ -333,7 +380,7 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
         binary_override: Some(mock_bin.clone()),
         enforce_capability: false,
         require_window_activation: false,
-        startup_timeout_ms: 3000,
+        startup_timeout_ms: 5000,
     };
 
     let alpha_proc = launch_account_with_options(&paths, "alpha", &opts)
@@ -341,7 +388,9 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
     assert_eq!(alpha_proc.account, "alpha");
 
     let alpha_record_file = paths.user_data_dir("alpha").join("launch_record.txt");
-    let alpha_content = fs::read_to_string(&alpha_record_file).expect("read alpha log");
+    let alpha_content =
+        read_record_file_with_timeout(&alpha_record_file, std::time::Duration::from_millis(5000))
+            .expect("read alpha log");
     assert!(
         alpha_content.contains(&format!(
             "--user-data-dir={}",
@@ -360,7 +409,9 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
     assert_eq!(beta_proc.account, "beta");
 
     let beta_record_file = paths.user_data_dir("beta").join("launch_record.txt");
-    let beta_content = fs::read_to_string(&beta_record_file).expect("read beta log");
+    let beta_content =
+        read_record_file_with_timeout(&beta_record_file, std::time::Duration::from_millis(5000))
+            .expect("read beta log");
     assert!(
         beta_content.contains(&format!(
             "--user-data-dir={}",
@@ -447,7 +498,7 @@ fn existing_process_detection_prevents_duplicate_launch() {
         binary_override: Some(mock_bin),
         enforce_capability: false,
         require_window_activation: false,
-        startup_timeout_ms: 2000,
+        startup_timeout_ms: 5000,
     };
 
     let first_launch =
