@@ -50,17 +50,17 @@ fn platform_expectations_are_pinned_explicitly() {
         // is NOT runtime validated, so shared store is explicitly reported No.
         assert_eq!(caps.filesystem_symlinks, Support::Yes);
         assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
-        assert!(matches!(caps.native_process_discovery, Support::No(_)));
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert!(matches!(caps.window_activation, Support::No(_)));
         assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }
     #[cfg(target_os = "windows")]
     {
         // Phase 1 promises only isolation on Windows: everything below must
-        // read as absent, never half-claimed.
+        // read as absent, never half-claimed. Native process discovery is validated in T2.
         assert!(matches!(caps.filesystem_symlinks, Support::No(_)));
         assert!(matches!(caps.shared_store_compatibility, Support::No(_)));
-        assert!(matches!(caps.native_process_discovery, Support::No(_)));
+        assert_eq!(caps.native_process_discovery, Support::Yes);
         assert!(matches!(caps.window_activation, Support::No(_)));
         assert!(matches!(caps.safe_desktop_launch, Support::No(_)));
     }

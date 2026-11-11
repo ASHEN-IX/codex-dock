@@ -12,7 +12,7 @@
 //! |---|---|---|---|
 //! | filesystem symlinks | yes | yes | no (needs Developer Mode) |
 //! | shared-store compatibility | yes | no (unvalidated; isolated) | no (unvalidated; isolated) |
-//! | native process discovery | yes (/proc) | no | no |
+//! | native process discovery | yes (/proc) | yes (libproc) | yes (Toolhelp32) |
 //! | window activation | yes (KWin/wmctrl) | no | no |
 //! | safe desktop launch | yes | no | no |
 //!
@@ -88,9 +88,7 @@ pub fn capabilities() -> Capabilities {
             shared_store_compatibility: Support::No(
                 "shared-store runtime compatibility is not validated on macOS yet; profiles stay isolated",
             ),
-            native_process_discovery: Support::No(
-                "process discovery reads /proc and that is Linux-only; macOS native process scanning is not implemented yet",
-            ),
+            native_process_discovery: Support::Yes,
             window_activation: Support::No(
                 "window activation targets KWin/wmctrl; macOS support is not implemented yet",
             ),
@@ -108,9 +106,7 @@ pub fn capabilities() -> Capabilities {
             shared_store_compatibility: Support::No(
                 "shared-store runtime compatibility is not validated on Windows yet; profiles stay isolated",
             ),
-            native_process_discovery: Support::No(
-                "native process discovery is not implemented for Windows yet",
-            ),
+            native_process_discovery: Support::Yes,
             window_activation: Support::No(
                 "window activation is not implemented for Windows yet",
             ),

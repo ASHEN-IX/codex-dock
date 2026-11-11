@@ -92,9 +92,7 @@ fn cmd_running(p: &Paths, account: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let proc_root = codex_dock_core::platform::process::proc_root()
-        .unwrap_or_else(|| std::path::PathBuf::from("/proc"));
-    for window in windows::running_for(p, &proc_root) {
+    for window in windows::running_native(p) {
         if filter.as_ref().is_none_or(|name| *name == window.account) {
             println!("{}", running_line(&window));
         }
