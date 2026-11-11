@@ -5,7 +5,7 @@
 use crate::accounts;
 use crate::error::{Error, Result};
 use crate::paths::Paths;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{
     attribute_process, is_candidate_codex_name, is_electron_helper, DiscoveredProcess,
@@ -115,7 +115,9 @@ fn resolve_nt_query_information_process() -> Option<FnNtQueryInformationProcess>
     if addr.is_null() {
         None
     } else {
-        Some(unsafe { std::mem::transmute(addr) })
+        Some(unsafe {
+            std::mem::transmute::<*mut std::ffi::c_void, FnNtQueryInformationProcess>(addr)
+        })
     }
 }
 
