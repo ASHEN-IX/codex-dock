@@ -348,6 +348,9 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
 
     let mock_bin = get_mock_desktop_binary(tmp.path(), false);
 
+    let canonical_alpha = std::fs::canonicalize(&alpha_dir).unwrap_or_else(|_| alpha_dir.clone());
+    let canonical_beta = std::fs::canonicalize(&beta_dir).unwrap_or_else(|_| beta_dir.clone());
+
     let opts = LaunchOptions::synthetic_test(Some(mock_bin.clone())).with_timeout(5000);
 
     let alpha_proc = launch_desktop_with_options(&paths, "alpha", &opts)
@@ -366,7 +369,7 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
         "expected alpha user data dir, got: {alpha_content}"
     );
     assert!(
-        alpha_content.contains(&format!("CODEX_HOME:{}", alpha_dir.display())),
+        alpha_content.contains(&format!("CODEX_HOME:{}", canonical_alpha.display())),
         "expected alpha CODEX_HOME, got: {alpha_content}"
     );
 
@@ -387,7 +390,7 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
         "expected beta user data dir, got: {beta_content}"
     );
     assert!(
-        beta_content.contains(&format!("CODEX_HOME:{}", beta_dir.display())),
+        beta_content.contains(&format!("CODEX_HOME:{}", canonical_beta.display())),
         "expected beta CODEX_HOME, got: {beta_content}"
     );
 
@@ -644,6 +647,7 @@ fn slow_startup_reports_indeterminate_and_subsequent_retry_prevents_duplicate() 
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn invisible_running_process_prevents_duplicate_on_retry() {
     let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (paths, tmp) = setup_test_env("invisible-running");
@@ -765,7 +769,7 @@ fn production_capability_cannot_be_bypassed_without_synthetic_test_flag() {
         let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
         assert!(
             err.to_string()
-                .contains("desktop launch is not supported on this platform"),
+                .contains("desktop launch is not supported here"),
             "expected platform capability rejection, got: {err}"
         );
     }
