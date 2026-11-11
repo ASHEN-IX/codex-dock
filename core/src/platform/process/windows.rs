@@ -87,9 +87,13 @@ extern "system" {
     ) -> *mut std::ffi::c_void;
 
     #[cfg(windows)]
-    fn CommandLineToArgvW(lpCmdLine: *const u16, pNumArgs: *mut i32) -> *mut *mut u16;
-    #[cfg(windows)]
     fn LocalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+extern "system" {
+    fn CommandLineToArgvW(lpCmdLine: *const u16, pNumArgs: *mut i32) -> *mut *mut u16;
 }
 
 type FnNtQueryInformationProcess = unsafe extern "system" fn(
@@ -197,7 +201,7 @@ pub fn parse_windows_command_line_native(cmd: &str) -> Vec<String> {
     let mut num_args: i32 = 0;
     let argv_ptr = unsafe { CommandLineToArgvW(wide.as_ptr(), &mut num_args) };
     if argv_ptr.is_null() || num_args <= 0 {
-        return Vec::new();
+        return parse_windows_command_line_msdn(cmd);
     }
 
     let mut args = Vec::with_capacity(num_args as usize);
