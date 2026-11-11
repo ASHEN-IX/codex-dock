@@ -53,14 +53,14 @@ impl PROCESSENTRY32W {
 }
 
 pub(crate) trait ProcessSnapshotEnumerator {
-    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32>;
-    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32>;
+    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32>;
+    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32>;
 }
 
 struct LiveSnapshotEnumerator(*mut std::ffi::c_void);
 
 impl ProcessSnapshotEnumerator for LiveSnapshotEnumerator {
-    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32> {
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let ok = unsafe { Process32FirstW(self.0, entry) };
         if ok != 0 {
@@ -75,7 +75,7 @@ impl ProcessSnapshotEnumerator for LiveSnapshotEnumerator {
         }
     }
 
-    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32> {
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let ok = unsafe { Process32NextW(self.0, entry) };
         if ok != 0 {
@@ -447,13 +447,13 @@ mod tests {
     use super::*;
 
     struct MockSnapshotEnumerator {
-        first_result: Result<Option<PROCESSENTRY32W>, u32>,
-        next_results: Vec<Result<Option<PROCESSENTRY32W>, u32>>,
+        first_result: std::result::Result<Option<PROCESSENTRY32W>, u32>,
+        next_results: Vec<std::result::Result<Option<PROCESSENTRY32W>, u32>>,
         next_index: usize,
     }
 
     impl ProcessSnapshotEnumerator for MockSnapshotEnumerator {
-        fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+        fn first(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32> {
             match &self.first_result {
                 Ok(Some(mock_entry)) => {
                     *entry = mock_entry.clone();
@@ -464,7 +464,7 @@ mod tests {
             }
         }
 
-        fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+        fn next(&mut self, entry: &mut PROCESSENTRY32W) -> std::result::Result<bool, u32> {
             if self.next_index < self.next_results.len() {
                 let res = &self.next_results[self.next_index];
                 self.next_index += 1;
