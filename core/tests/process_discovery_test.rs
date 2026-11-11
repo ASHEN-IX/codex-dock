@@ -363,21 +363,29 @@ fn query_account_preserves_partially_discovered_processes_and_exposes_uncertaint
 
 #[test]
 fn unicode_string_buffer_parsing_handles_contract_and_memory_safety() {
-    // 1. Valid buffer on 64-bit:
-    // Header (16 bytes): Length = 20 bytes (10 u16 chars), MaximumLength = 22, Buffer pointer (8 bytes)
-    // Followed by "app --flag" in UTF-16
+    let is_64_bit = std::mem::size_of::<usize>() == 8;
+    let header_size = if is_64_bit { 16 } else { 8 };
+    let ptr_offset = if is_64_bit { 8 } else { 4 };
+
     let text = "app --flag";
     let wide_chars: Vec<u16> = text.encode_utf16().collect();
     let char_bytes_len = (wide_chars.len() * 2) as u16;
 
-    let header_size = if std::mem::size_of::<usize>() == 8 {
-        16
-    } else {
-        8
+    // Helper closure to write pointer into header:
+    let write_ptr = |buf: &mut [u8], ptr: usize| {
+        if is_64_bit {
+            buf[ptr_offset..ptr_offset + 8].copy_from_slice(&(ptr as u64).to_ne_bytes());
+        } else {
+            buf[ptr_offset..ptr_offset + 4].copy_from_slice(&(ptr as u32).to_ne_bytes());
+        }
     };
+
+    // 1. Valid buffer with absolute pointer into caller's buffer:
     let mut buf = vec![0u8; header_size + (char_bytes_len as usize)];
     buf[0..2].copy_from_slice(&char_bytes_len.to_ne_bytes());
     buf[2..4].copy_from_slice(&(char_bytes_len + 2).to_ne_bytes());
+    let abs_ptr = buf.as_ptr() as usize + header_size;
+    write_ptr(&mut buf, abs_ptr);
 
     for (idx, &ch) in wide_chars.iter().enumerate() {
         let offset = header_size + idx * 2;
@@ -387,24 +395,87 @@ fn unicode_string_buffer_parsing_handles_contract_and_memory_safety() {
     let parsed = parse_unicode_string_buffer(&buf);
     assert_eq!(parsed, Some("app --flag".to_string()));
 
-    // 2. Truncated buffer (< header_size):
+    // 2. Valid buffer with non-standard offset (padding between header and string data):
+    let extra_padding = 8;
+    let str_offset = header_size + extra_padding;
+    let mut padded_buf = vec![0u8; str_offset + (char_bytes_len as usize)];
+    padded_buf[0..2].copy_from_slice(&char_bytes_len.to_ne_bytes());
+    padded_buf[2..4].copy_from_slice(&(char_bytes_len + 4).to_ne_bytes());
+    let padded_abs_ptr = padded_buf.as_ptr() as usize + str_offset;
+    write_ptr(&mut padded_buf, padded_abs_ptr);
+
+    for (idx, &ch) in wide_chars.iter().enumerate() {
+        let offset = str_offset + idx * 2;
+        padded_buf[offset..offset + 2].copy_from_slice(&ch.to_ne_bytes());
+    }
+
+    let parsed_padded = parse_unicode_string_buffer(&padded_buf);
+    assert_eq!(parsed_padded, Some("app --flag".to_string()));
+
+    // 3. Valid buffer with relative offset:
+    let mut rel_buf = buf.clone();
+    write_ptr(&mut rel_buf, header_size);
+    assert_eq!(
+        parse_unicode_string_buffer(&rel_buf),
+        Some("app --flag".to_string())
+    );
+
+    // 4. Null pointer rejection:
+    let mut null_ptr_buf = buf.clone();
+    write_ptr(&mut null_ptr_buf, 0);
+    assert_eq!(parse_unicode_string_buffer(&null_ptr_buf), None);
+
+    // 5. Invalid offset: pointer references memory past buffer bounds:
+    let mut over_ptr_buf = buf.clone();
+    let bad_ptr_high = buf.as_ptr() as usize + buf.len() + 100;
+    write_ptr(&mut over_ptr_buf, bad_ptr_high);
+    assert_eq!(parse_unicode_string_buffer(&over_ptr_buf), None);
+
+    // 6. Invalid offset: pointer references memory before buffer base:
+    let mut under_ptr_buf = buf.clone();
+    let bad_ptr_low = (buf.as_ptr() as usize).saturating_sub(100);
+    write_ptr(&mut under_ptr_buf, bad_ptr_low);
+    assert_eq!(parse_unicode_string_buffer(&under_ptr_buf), None);
+
+    // 7. Invalid offset: pointer points inside UNICODE_STRING header itself:
+    let mut overlap_buf = buf.clone();
+    let overlap_ptr = buf.as_ptr() as usize + 2;
+    write_ptr(&mut overlap_buf, overlap_ptr);
+    assert_eq!(parse_unicode_string_buffer(&overlap_buf), None);
+
+    // 8. Unaligned pointer: offset is odd (not 2-byte aligned for UTF-16):
+    let mut unaligned_buf = vec![0u8; header_size + 20];
+    unaligned_buf[0..2].copy_from_slice(&10u16.to_ne_bytes());
+    unaligned_buf[2..4].copy_from_slice(&12u16.to_ne_bytes());
+    let odd_ptr = unaligned_buf.as_ptr() as usize + header_size + 1;
+    write_ptr(&mut unaligned_buf, odd_ptr);
+    assert_eq!(parse_unicode_string_buffer(&unaligned_buf), None);
+
+    // 9. Truncated buffer (< header_size):
     assert_eq!(parse_unicode_string_buffer(&[0u8; 4]), None);
     assert_eq!(parse_unicode_string_buffer(&[]), None);
 
-    // 3. Odd length bytes (invalid UTF-16):
-    let mut odd_buf = vec![0u8; header_size + 10];
-    odd_buf[0..2].copy_from_slice(&5u16.to_ne_bytes()); // 5 is odd
-    assert_eq!(parse_unicode_string_buffer(&odd_buf), None);
+    // 10. Truncated string: declared Length extends beyond returned buffer:
+    let mut trunc_str_buf = buf.clone();
+    trunc_str_buf[0..2].copy_from_slice(&100u16.to_ne_bytes()); // Length 100 exceeds allocated size
+    trunc_str_buf[2..4].copy_from_slice(&120u16.to_ne_bytes());
+    assert_eq!(parse_unicode_string_buffer(&trunc_str_buf), None);
 
-    // 4. Oversized length (declared length exceeds buffer size):
-    let mut over_buf = vec![0u8; header_size + 4];
-    over_buf[0..2].copy_from_slice(&100u16.to_ne_bytes());
-    assert_eq!(parse_unicode_string_buffer(&over_buf), None);
+    // 11. Malformed header: Length > MaximumLength:
+    let mut malformed_len_buf = buf.clone();
+    malformed_len_buf[0..2].copy_from_slice(&20u16.to_ne_bytes());
+    malformed_len_buf[2..4].copy_from_slice(&10u16.to_ne_bytes()); // MaximumLength < Length
+    assert_eq!(parse_unicode_string_buffer(&malformed_len_buf), None);
 
-    // 5. Zero length:
-    let mut zero_buf = vec![0u8; header_size + 4];
-    zero_buf[0..2].copy_from_slice(&0u16.to_ne_bytes());
-    assert_eq!(parse_unicode_string_buffer(&zero_buf), None);
+    // 12. Malformed header: odd byte count (invalid UTF-16 code units):
+    let mut odd_len_buf = buf.clone();
+    odd_len_buf[0..2].copy_from_slice(&5u16.to_ne_bytes()); // odd length
+    assert_eq!(parse_unicode_string_buffer(&odd_len_buf), None);
+
+    // 13. Malformed header: zero length:
+    let mut zero_len_buf = buf.clone();
+    zero_len_buf[0..2].copy_from_slice(&0u16.to_ne_bytes());
+    assert_eq!(parse_unicode_string_buffer(&zero_len_buf), None);
 }
 
 #[test]

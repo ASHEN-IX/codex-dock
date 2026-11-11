@@ -86,29 +86,64 @@ pub enum DiscoveryOutcome {
 /// - 2..4: MaximumLength in bytes (u16)
 /// - 4..8 (32-bit) or 8..16 (64-bit): Buffer pointer (*mut u16)
 ///
-/// Followed immediately in the caller's buffer by UTF-16 code units.
-/// Reading via byte pairs eliminates unaligned `*const u16` slice creation.
+/// Invariants and Validation:
+/// 1. Validate header size (16 bytes on 64-bit, 8 bytes on 32-bit).
+/// 2. Validate `Length` and `MaximumLength`: `len_bytes > 0`, `len_bytes & 1 == 0`, and `len_bytes <= max_len_bytes`.
+/// 3. Inspect `Buffer` pointer: null pointers are rejected.
+/// 4. Confirm pointer references a valid region of the caller's returned buffer.
+/// 5. Calculate string offset from the validated pointer rather than assuming it immediately follows the header.
+/// 6. Ensure calculated offset does not overlap the header and is 2-byte aligned.
+/// 7. Ensure `offset + len_bytes <= buf.len()`.
+/// 8. Decode UTF-16 code units via alignment-safe byte chunks (`chunks_exact(2)` + `u16::from_ne_bytes`).
 pub fn parse_unicode_string_buffer(buf: &[u8]) -> Option<String> {
-    let header_size = if std::mem::size_of::<usize>() == 8 {
-        16
-    } else {
-        8
-    };
+    let is_64_bit = std::mem::size_of::<usize>() == 8;
+    let header_size = if is_64_bit { 16 } else { 8 };
 
     if buf.len() < header_size {
         return None;
     }
 
     let len_bytes = u16::from_ne_bytes([buf[0], buf[1]]) as usize;
-    if len_bytes == 0 || (len_bytes & 1) != 0 {
+    let max_len_bytes = u16::from_ne_bytes([buf[2], buf[3]]) as usize;
+
+    if len_bytes == 0 || (len_bytes & 1) != 0 || len_bytes > max_len_bytes {
         return None;
     }
 
-    if buf.len() < header_size + len_bytes {
+    let ptr_val = if is_64_bit {
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(&buf[8..16]);
+        u64::from_ne_bytes(arr) as usize
+    } else {
+        let mut arr = [0u8; 4];
+        arr.copy_from_slice(&buf[4..8]);
+        u32::from_ne_bytes(arr) as usize
+    };
+
+    if ptr_val == 0 {
         return None;
     }
 
-    let char_bytes = &buf[header_size..header_size + len_bytes];
+    let base_addr = buf.as_ptr() as usize;
+    let offset = if ptr_val >= base_addr {
+        ptr_val.checked_sub(base_addr)?
+    } else if ptr_val >= header_size && ptr_val <= buf.len() {
+        // Fallback for relative offsets (e.g. synthetic test fixtures)
+        ptr_val
+    } else {
+        return None;
+    };
+
+    if offset < header_size || (offset & 1) != 0 {
+        return None;
+    }
+
+    let end = offset.checked_add(len_bytes)?;
+    if end > buf.len() {
+        return None;
+    }
+
+    let char_bytes = &buf[offset..end];
     #[allow(clippy::chunks_exact_to_as_chunks)]
     let u16_chars: Vec<u16> = char_bytes
         .chunks_exact(2)

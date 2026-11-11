@@ -20,21 +20,75 @@ const INVALID_HANDLE_VALUE: isize = -1;
 const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 
 const ERROR_ACCESS_DENIED: u32 = 5;
+const ERROR_NO_MORE_FILES: u32 = 18;
 const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_NOT_FOUND: u32 = 1168;
 
 #[repr(C)]
-struct PROCESSENTRY32W {
-    dwSize: u32,
-    cntUsage: u32,
-    th32ProcessID: u32,
-    th32DefaultHeapID: usize,
-    th32ModuleID: u32,
-    cntThreads: u32,
-    th32ParentProcessID: u32,
-    pcPriClassBase: i32,
-    dwFlags: u32,
-    szExeFile: [u16; 260],
+#[derive(Clone)]
+pub(crate) struct PROCESSENTRY32W {
+    pub(crate) dwSize: u32,
+    pub(crate) cntUsage: u32,
+    pub(crate) th32ProcessID: u32,
+    pub(crate) th32DefaultHeapID: usize,
+    pub(crate) th32ModuleID: u32,
+    pub(crate) cntThreads: u32,
+    pub(crate) th32ParentProcessID: u32,
+    pub(crate) pcPriClassBase: i32,
+    pub(crate) dwFlags: u32,
+    pub(crate) szExeFile: [u16; 260],
+}
+
+#[cfg(test)]
+impl PROCESSENTRY32W {
+    pub(crate) fn new_mock(pid: u32, name: &str) -> Self {
+        let mut entry: Self = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<Self>() as u32;
+        entry.th32ProcessID = pid;
+        let wide: Vec<u16> = name.encode_utf16().collect();
+        let copy_len = wide.len().min(entry.szExeFile.len() - 1);
+        entry.szExeFile[..copy_len].copy_from_slice(&wide[..copy_len]);
+        entry
+    }
+}
+
+pub(crate) trait ProcessSnapshotEnumerator {
+    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32>;
+    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32>;
+}
+
+struct LiveSnapshotEnumerator(*mut std::ffi::c_void);
+
+impl ProcessSnapshotEnumerator for LiveSnapshotEnumerator {
+    fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let ok = unsafe { Process32FirstW(self.0, entry) };
+        if ok != 0 {
+            Ok(true)
+        } else {
+            let err = unsafe { GetLastError() };
+            if err == ERROR_NO_MORE_FILES || err == 0 {
+                Ok(false)
+            } else {
+                Err(err)
+            }
+        }
+    }
+
+    fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let ok = unsafe { Process32NextW(self.0, entry) };
+        if ok != 0 {
+            Ok(true)
+        } else {
+            let err = unsafe { GetLastError() };
+            if err == ERROR_NO_MORE_FILES || err == 0 {
+                Ok(false)
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 struct AutoHandle(*mut std::ffi::c_void);
@@ -243,10 +297,19 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
         Error::Msg(format!("CreateToolhelp32Snapshot failed with code {err}"))
     })?;
 
+    let nt_query = resolve_nt_query_information_process();
+    let enumerator = LiveSnapshotEnumerator(snap_guard.raw());
+    scan_processes_with_enumerator(p, enumerator, nt_query)
+}
+
+pub(crate) fn scan_processes_with_enumerator<E: ProcessSnapshotEnumerator>(
+    p: &Paths,
+    mut enumerator: E,
+    nt_query: Option<FnNtQueryInformationProcess>,
+) -> Result<ProcessDiscoveryReport> {
     let managed = accounts::list(p).unwrap_or_default();
     let desktop = crate::tool::desktop();
     let configured_desktop = desktop.file_name().and_then(|s| s.to_str());
-    let nt_query = resolve_nt_query_information_process();
 
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
@@ -255,8 +318,17 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
     let mut warnings = Vec::new();
     let mut is_complete = true;
 
-    let mut ok = unsafe { Process32FirstW(snap_guard.raw(), &mut entry) };
-    while ok != 0 {
+    let mut has_entry = match enumerator.first(&mut entry) {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(err) => {
+            warnings.push(format!("Process32FirstW failed: error code {err}"));
+            is_complete = false;
+            false
+        }
+    };
+
+    while has_entry {
         let pid = entry.th32ProcessID;
         // Skip System Idle (0) and System (4):
         if pid > 4 {
@@ -345,8 +417,21 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
             }
         }
 
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        ok = unsafe { Process32NextW(snap_guard.raw(), &mut entry) };
+        match enumerator.next(&mut entry) {
+            Ok(true) => {
+                has_entry = true;
+            }
+            Ok(false) => {
+                has_entry = false;
+            }
+            Err(err) => {
+                warnings.push(format!(
+                    "Process32NextW failed prematurely: error code {err}"
+                ));
+                is_complete = false;
+                has_entry = false;
+            }
+        }
     }
 
     processes.sort_by_key(|p| p.pid);
@@ -355,4 +440,109 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
         warnings,
         is_complete,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockSnapshotEnumerator {
+        first_result: Result<Option<PROCESSENTRY32W>, u32>,
+        next_results: Vec<Result<Option<PROCESSENTRY32W>, u32>>,
+        next_index: usize,
+    }
+
+    impl ProcessSnapshotEnumerator for MockSnapshotEnumerator {
+        fn first(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+            match &self.first_result {
+                Ok(Some(mock_entry)) => {
+                    *entry = mock_entry.clone();
+                    Ok(true)
+                }
+                Ok(None) => Ok(false),
+                Err(e) => Err(*e),
+            }
+        }
+
+        fn next(&mut self, entry: &mut PROCESSENTRY32W) -> Result<bool, u32> {
+            if self.next_index < self.next_results.len() {
+                let res = &self.next_results[self.next_index];
+                self.next_index += 1;
+                match res {
+                    Ok(Some(mock_entry)) => {
+                        *entry = mock_entry.clone();
+                        Ok(true)
+                    }
+                    Ok(None) => Ok(false),
+                    Err(e) => Err(*e),
+                }
+            } else {
+                Ok(false)
+            }
+        }
+    }
+
+    #[test]
+    fn enumeration_failure_on_first_process_marks_scan_incomplete() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("cd-win-enum-test-{}", std::process::id()));
+        let paths = Paths::new(temp_dir.join("base"), temp_dir.join("profiles"));
+
+        let mock = MockSnapshotEnumerator {
+            first_result: Err(ERROR_ACCESS_DENIED), // code 5
+            next_results: vec![],
+            next_index: 0,
+        };
+
+        let report = scan_processes_with_enumerator(&paths, mock, None).unwrap();
+        assert!(report.processes.is_empty());
+        assert!(
+            !report.is_complete,
+            "scan must not be reported complete after enumeration failure"
+        );
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Process32FirstW failed: error code 5"));
+    }
+
+    #[test]
+    fn enumeration_clean_completion_with_no_more_files_is_complete() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("cd-win-enum-empty-{}", std::process::id()));
+        let paths = Paths::new(temp_dir.join("base"), temp_dir.join("profiles"));
+
+        let mock = MockSnapshotEnumerator {
+            first_result: Ok(None), // ERROR_NO_MORE_FILES immediately
+            next_results: vec![],
+            next_index: 0,
+        };
+
+        let report = scan_processes_with_enumerator(&paths, mock, None).unwrap();
+        assert!(report.processes.is_empty());
+        assert!(
+            report.is_complete,
+            "clean scan termination must be complete"
+        );
+        assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn enumeration_premature_termination_on_next_marks_scan_incomplete() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("cd-win-enum-next-{}", std::process::id()));
+        let paths = Paths::new(temp_dir.join("base"), temp_dir.join("profiles"));
+
+        let mock = MockSnapshotEnumerator {
+            first_result: Ok(Some(PROCESSENTRY32W::new_mock(1234, "notepad.exe"))),
+            next_results: vec![Err(6)], // ERROR_INVALID_HANDLE on next
+            next_index: 0,
+        };
+
+        let report = scan_processes_with_enumerator(&paths, mock, None).unwrap();
+        assert!(
+            !report.is_complete,
+            "scan must be marked incomplete when Process32NextW fails prematurely"
+        );
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Process32NextW failed prematurely: error code 6"));
+    }
 }
