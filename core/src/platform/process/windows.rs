@@ -1,5 +1,7 @@
 //! Windows native process discovery using Toolhelp32 snapshot and QueryFullProcessImageNameW.
 
+#![allow(non_snake_case, non_camel_case_types)]
+
 use crate::accounts;
 use crate::error::{Error, Result};
 use crate::paths::Paths;
