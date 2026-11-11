@@ -1,6 +1,6 @@
 use codex_dock_core::paths::Paths;
 use codex_dock_core::platform::launch::{
-    launch_account_with_options, resolve_desktop_binary, resolve_macos_bundle_executable,
+    launch_desktop_with_options, resolve_desktop_binary, resolve_macos_bundle_executable,
     LaunchOptions,
 };
 use codex_dock_core::windows;
@@ -148,13 +148,13 @@ fn launch_rejects_invalid_and_traversal_account_names() {
         ..Default::default()
     };
 
-    let err = launch_account_with_options(&paths, "../escape", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "../escape", &opts).unwrap_err();
     assert!(err.to_string().contains("invalid account name"));
 
-    let err = launch_account_with_options(&paths, "has/slash", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "has/slash", &opts).unwrap_err();
     assert!(err.to_string().contains("invalid account name"));
 
-    let err = launch_account_with_options(&paths, "", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "", &opts).unwrap_err();
     assert!(err.to_string().contains("cannot be empty") || err.to_string().contains("invalid"));
 }
 
@@ -167,7 +167,7 @@ fn launch_rejects_non_existent_account() {
         ..Default::default()
     };
 
-    let err = launch_account_with_options(&paths, "nonexistent", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "nonexistent", &opts).unwrap_err();
     assert!(
         err.to_string().contains("unknown account") || err.to_string().contains("does not exist"),
         "expected missing account error, got: {err}"
@@ -189,7 +189,7 @@ fn launch_refuses_when_repair_is_in_progress() {
         ..Default::default()
     };
 
-    let err = launch_account_with_options(&paths, "work", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
         err.to_string().contains("repair is currently in progress"),
         "expected repair active error, got: {err}"
@@ -214,7 +214,7 @@ fn launch_refuses_concurrent_launch_for_same_profile() {
         ..Default::default()
     };
 
-    let err = launch_account_with_options(&paths, "work", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
         err.to_string().contains("profile 'work' launch")
             || err.to_string().contains("lock contention"),
@@ -240,7 +240,7 @@ fn launch_refuses_codex_cli_executable_as_desktop() {
         ..Default::default()
     };
 
-    let err = launch_account_with_options(&paths, "work", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
         err.to_string().contains("Codex CLI, not Codex Desktop"),
         "expected CLI rejection error, got: {err}"
@@ -383,7 +383,7 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
         startup_timeout_ms: 5000,
     };
 
-    let alpha_proc = launch_account_with_options(&paths, "alpha", &opts)
+    let alpha_proc = launch_desktop_with_options(&paths, "alpha", &opts)
         .expect("launch alpha with mock desktop");
     assert_eq!(alpha_proc.account, "alpha");
 
@@ -405,7 +405,7 @@ fn two_independent_profiles_receive_isolated_arguments_and_environment() {
 
     // Launch Beta
     let beta_proc =
-        launch_account_with_options(&paths, "beta", &opts).expect("launch beta with mock desktop");
+        launch_desktop_with_options(&paths, "beta", &opts).expect("launch beta with mock desktop");
     assert_eq!(beta_proc.account, "beta");
 
     let beta_record_file = paths.user_data_dir("beta").join("launch_record.txt");
@@ -469,7 +469,7 @@ fn early_process_exit_during_startup_is_detected_and_cleans_up_lock() {
         startup_timeout_ms: 2000,
     };
 
-    let err = launch_account_with_options(&paths, "work", &opts).unwrap_err();
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
 
     assert!(
         err.to_string().contains("exited before opening a window"),
@@ -502,11 +502,11 @@ fn existing_process_detection_prevents_duplicate_launch() {
     };
 
     let first_launch =
-        launch_account_with_options(&paths, "work", &opts).expect("first launch should succeed");
+        launch_desktop_with_options(&paths, "work", &opts).expect("first launch should succeed");
     assert_eq!(first_launch.account, "work");
 
     // Second launch attempt while first is still alive:
-    let second_launch = launch_account_with_options(&paths, "work", &opts);
+    let second_launch = launch_desktop_with_options(&paths, "work", &opts);
 
     // Depending on whether window_activation is Yes or No:
     // If Yes and focus fails: "running ... but its window could not be restored"

@@ -13,7 +13,7 @@ pub struct LaunchOptions {
     /// Optional binary path override (e.g. for testing with mock desktop binaries).
     pub binary_override: Option<PathBuf>,
     /// Whether to enforce platform `safe_desktop_launch` capability check.
-    /// In production (`launch_account`), this is always `true`. In synthetic unit tests,
+    /// In production (`launch_desktop`), this is always `true`. In synthetic unit tests,
     /// this may be set to `false` to verify the execution engine without official binaries.
     pub enforce_capability: bool,
     /// Whether to require a GUI window activation confirmation if window_activation capability is supported.
@@ -163,12 +163,12 @@ fn detach_from_controlling_terminal(cmd: &mut std::process::Command) {
 }
 
 /// Safely launch Codex Desktop for a managed profile.
-pub fn launch_account(p: &Paths, name: &str) -> Result<WindowProc> {
-    launch_account_with_options(p, name, &LaunchOptions::default())
+pub fn launch_desktop(p: &Paths, name: &str) -> Result<WindowProc> {
+    launch_desktop_with_options(p, name, &LaunchOptions::default())
 }
 
 /// Safely launch Codex Desktop for a managed profile with explicit options.
-pub fn launch_account_with_options(
+pub fn launch_desktop_with_options(
     p: &Paths,
     name: &str,
     options: &LaunchOptions,

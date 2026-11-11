@@ -59,7 +59,7 @@ pub fn user_data_dir(p: &Paths, name: &str) -> PathBuf {
 }
 
 pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
-    crate::platform::launch::launch_account(p, name)
+    crate::platform::launch::launch_desktop(p, name)
 }
 
 /// Fail-closed native process discovery scanning the given `proc_root`.
