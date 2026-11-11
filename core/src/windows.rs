@@ -15,6 +15,7 @@ pub struct WindowProc {
     pub pid: u32,
     pub account: String,
     pub user_data_dir: PathBuf,
+    pub launcher_pid: Option<u32>,
 }
 
 const FLAG: &str = "--user-data-dir=";
@@ -170,6 +171,7 @@ pub fn scan_running(proc_root: &Path) -> Result<Vec<WindowProc>> {
             pid,
             account,
             user_data_dir,
+            launcher_pid: None,
         });
     }
     out.sort_by_key(|a| a.pid);
@@ -252,6 +254,7 @@ pub fn scan_running_native(p: &Paths) -> Result<Vec<WindowProc>> {
                 pid: proc.pid,
                 account,
                 user_data_dir,
+                launcher_pid: None,
             }
         })
         .collect())

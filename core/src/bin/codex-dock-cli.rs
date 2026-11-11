@@ -367,6 +367,7 @@ mod tests {
             pid: 42,
             account: "private-account-label".into(),
             user_data_dir: PathBuf::from("/home/private-user/.config/Codex-private-account-label"),
+            launcher_pid: None,
         };
         let line = running_line(&window);
         assert!(line.contains("42"));

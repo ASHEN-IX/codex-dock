@@ -143,10 +143,7 @@ echo codex-cli 0.166.0
 fn launch_rejects_invalid_and_traversal_account_names() {
     let (paths, _tmp) = setup_test_env("invalid-names");
 
-    let opts = LaunchOptions {
-        enforce_capability: false,
-        ..Default::default()
-    };
+    let opts = LaunchOptions::synthetic_test(None);
 
     let err = launch_desktop_with_options(&paths, "../escape", &opts).unwrap_err();
     assert!(err.to_string().contains("invalid account name"));
@@ -162,10 +159,7 @@ fn launch_rejects_invalid_and_traversal_account_names() {
 fn launch_rejects_non_existent_account() {
     let (paths, _tmp) = setup_test_env("nonexistent");
 
-    let opts = LaunchOptions {
-        enforce_capability: false,
-        ..Default::default()
-    };
+    let opts = LaunchOptions::synthetic_test(None);
 
     let err = launch_desktop_with_options(&paths, "nonexistent", &opts).unwrap_err();
     assert!(
@@ -184,10 +178,7 @@ fn launch_refuses_when_repair_is_in_progress() {
     let _lock = codex_dock_core::platform::fs::LockGuard::try_acquire(&repair_lock, "repair")
         .expect("acquire repair lock");
 
-    let opts = LaunchOptions {
-        enforce_capability: false,
-        ..Default::default()
-    };
+    let opts = LaunchOptions::synthetic_test(None);
 
     let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
@@ -209,10 +200,7 @@ fn launch_refuses_concurrent_launch_for_same_profile() {
     )
     .expect("acquire launch lock");
 
-    let opts = LaunchOptions {
-        enforce_capability: false,
-        ..Default::default()
-    };
+    let opts = LaunchOptions::synthetic_test(None);
 
     let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
@@ -234,11 +222,7 @@ fn launch_refuses_codex_cli_executable_as_desktop() {
 
     let cli_path = create_mock_cli_script(tmp.path(), cli_name);
 
-    let opts = LaunchOptions {
-        binary_override: Some(cli_path.clone()),
-        enforce_capability: false,
-        ..Default::default()
-    };
+    let opts = LaunchOptions::synthetic_test(Some(cli_path));
 
     let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
     assert!(
@@ -284,11 +268,7 @@ fn resolve_desktop_binary_checks_presence_and_bundle_structure() {
 
     #[cfg(unix)]
     {
-        let opts = LaunchOptions {
-            binary_override: Some(exec_path.clone()),
-            enforce_capability: false,
-            ..Default::default()
-        };
+        let opts = LaunchOptions::synthetic_test(Some(exec_path.clone()));
         let bin = resolve_desktop_binary(&opts).unwrap();
         assert_eq!(bin, exec_path);
     }
@@ -296,11 +276,7 @@ fn resolve_desktop_binary_checks_presence_and_bundle_structure() {
     #[cfg(target_os = "macos")]
     {
         // On macOS, passing .app bundle directory directly resolves inner Mach-O binary
-        let opts = LaunchOptions {
-            binary_override: Some(bundle_dir.clone()),
-            enforce_capability: false,
-            ..Default::default()
-        };
+        let opts = LaunchOptions::synthetic_test(Some(bundle_dir.clone()));
         let bin = resolve_desktop_binary(&opts).unwrap();
         assert_eq!(bin, exec_path);
     }
@@ -309,11 +285,7 @@ fn resolve_desktop_binary_checks_presence_and_bundle_structure() {
     {
         let win_exec = tmp.path().join("Codex.exe");
         fs::write(&win_exec, "@echo off\n").unwrap();
-        let opts = LaunchOptions {
-            binary_override: Some(win_exec.clone()),
-            enforce_capability: false,
-            ..Default::default()
-        };
+        let opts = LaunchOptions::synthetic_test(Some(win_exec.clone()));
         let bin = resolve_desktop_binary(&opts).unwrap();
         assert_eq!(bin, win_exec);
     }
@@ -369,19 +341,14 @@ fn read_record_file_with_timeout(
 
 #[test]
 fn two_independent_profiles_receive_isolated_arguments_and_environment() {
-    let _lock = LAUNCH_MUTEX.lock().unwrap();
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (paths, tmp) = setup_test_env("multi-profile");
     let alpha_dir = create_mock_account(&paths, "alpha");
     let beta_dir = create_mock_account(&paths, "beta");
 
     let mock_bin = get_mock_desktop_binary(tmp.path(), false);
 
-    let opts = LaunchOptions {
-        binary_override: Some(mock_bin.clone()),
-        enforce_capability: false,
-        require_window_activation: false,
-        startup_timeout_ms: 5000,
-    };
+    let opts = LaunchOptions::synthetic_test(Some(mock_bin.clone())).with_timeout(5000);
 
     let alpha_proc = launch_desktop_with_options(&paths, "alpha", &opts)
         .expect("launch alpha with mock desktop");
@@ -454,20 +421,89 @@ fn terminate_pid(pid: u32) {
         .output();
 }
 
+fn get_mock_launcher_binary(dir: &Path, slow: bool) -> PathBuf {
+    let _ = get_mock_desktop_binary(dir, false);
+    let mut target_dir = std::env::current_exe().expect("current_exe");
+    target_dir.pop();
+    if target_dir.file_name().and_then(|s| s.to_str()) == Some("deps") {
+        target_dir.pop();
+    }
+    let bin_name = if cfg!(windows) {
+        "mock-desktop.exe"
+    } else {
+        "mock-desktop"
+    };
+    let src_bin = target_dir.join(bin_name);
+    let target_name = if slow {
+        if cfg!(windows) {
+            "slow-launcher.exe"
+        } else {
+            "slow-launcher"
+        }
+    } else if cfg!(windows) {
+        "mock-launcher.exe"
+    } else {
+        "mock-launcher"
+    };
+    let dest_bin = dir.join(target_name);
+    if src_bin.is_file() {
+        fs::copy(&src_bin, &dest_bin).expect("copy mock launcher");
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = if slow {
+                r#"#!/bin/sh
+sleep 0.35
+for arg in "$@"; do
+    case "$arg" in
+        --user-data-dir=*)
+            udir="${arg#--user-data-dir=}"
+            echo "ARGS:$@" > "$udir/launch_record.txt"
+            echo "CODEX_HOME:$CODEX_HOME" >> "$udir/launch_record.txt"
+            ;;
+    esac
+done
+sleep 10 &
+exit 0
+"#
+            } else {
+                r#"#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        --user-data-dir=*)
+            udir="${arg#--user-data-dir=}"
+            echo "ARGS:$@" > "$udir/launch_record.txt"
+            echo "CODEX_HOME:$CODEX_HOME" >> "$udir/launch_record.txt"
+            ;;
+    esac
+done
+sleep 10 &
+exit 0
+"#
+            };
+            fs::write(&dest_bin, script).unwrap();
+            let mut perms = fs::metadata(&dest_bin).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&dest_bin, perms).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            panic!("mock-desktop.exe must be compiled at {}", src_bin.display());
+        }
+    }
+    dest_bin
+}
+
 #[test]
 fn early_process_exit_during_startup_is_detected_and_cleans_up_lock() {
-    let _lock = LAUNCH_MUTEX.lock().unwrap();
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (paths, tmp) = setup_test_env("early-exit");
     create_mock_account(&paths, "work");
 
     let fail_bin = get_mock_desktop_binary(tmp.path(), true);
 
-    let opts = LaunchOptions {
-        binary_override: Some(fail_bin),
-        enforce_capability: false,
-        require_window_activation: false,
-        startup_timeout_ms: 2000,
-    };
+    let opts = LaunchOptions::synthetic_test(Some(fail_bin)).with_timeout(2000);
 
     let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
 
@@ -488,18 +524,13 @@ fn early_process_exit_during_startup_is_detected_and_cleans_up_lock() {
 
 #[test]
 fn existing_process_detection_prevents_duplicate_launch() {
-    let _lock = LAUNCH_MUTEX.lock().unwrap();
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (paths, tmp) = setup_test_env("duplicate-prevention");
     create_mock_account(&paths, "work");
 
     let mock_bin = get_mock_desktop_binary(tmp.path(), false);
 
-    let opts = LaunchOptions {
-        binary_override: Some(mock_bin),
-        enforce_capability: false,
-        require_window_activation: false,
-        startup_timeout_ms: 5000,
-    };
+    let opts = LaunchOptions::synthetic_test(Some(mock_bin)).with_timeout(5000);
 
     let first_launch =
         launch_desktop_with_options(&paths, "work", &opts).expect("first launch should succeed");
@@ -523,11 +554,219 @@ fn existing_process_detection_prevents_duplicate_launch() {
         Err(e) => {
             let msg = e.to_string();
             assert!(
-                msg.contains("is running") || msg.contains("already running"),
+                msg.contains("is running")
+                    || msg.contains("already running")
+                    || msg.contains("still running or starting"),
                 "expected existing process detection error, got: {msg}"
             );
         }
     }
 
     terminate_pid(first_launch.pid);
+}
+
+#[test]
+fn launcher_handoff_returns_desktop_pid_and_preserves_launcher_pid() {
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (paths, tmp) = setup_test_env("launcher-handoff");
+    create_mock_account(&paths, "work");
+
+    let launcher_bin = get_mock_launcher_binary(tmp.path(), false);
+    let opts = LaunchOptions::synthetic_test(Some(launcher_bin)).with_timeout(5000);
+
+    let w = launch_desktop_with_options(&paths, "work", &opts)
+        .expect("launch via handoff launcher should succeed");
+
+    assert_eq!(w.account, "work");
+    // Discovered desktop PID must be running:
+    assert!(codex_dock_core::platform::process::is_process_alive(w.pid));
+    // Initial launcher PID is preserved:
+    assert!(w.launcher_pid.is_some());
+    let launcher_pid = w.launcher_pid.unwrap();
+    assert_ne!(
+        w.pid, launcher_pid,
+        "desktop PID must differ from launcher PID"
+    );
+
+    // Allow OS churn for launcher exit:
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(
+        !codex_dock_core::platform::process::is_process_alive(launcher_pid),
+        "launcher process PID must be exited"
+    );
+
+    terminate_pid(w.pid);
+}
+
+#[test]
+fn slow_startup_reports_indeterminate_and_subsequent_retry_prevents_duplicate() {
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (paths, tmp) = setup_test_env("slow-startup");
+    create_mock_account(&paths, "work");
+
+    let slow_bin = get_mock_launcher_binary(tmp.path(), true);
+    // Timeout of 60ms is shorter than 350ms delay:
+    let opts = LaunchOptions::synthetic_test(Some(slow_bin.clone())).with_timeout(60);
+
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("indeterminate") || msg.contains("timed out"),
+        "expected indeterminate/timeout error, got: {msg}"
+    );
+
+    // Wait for the slow launcher to finish handoff and spawn the desktop:
+    std::thread::sleep(std::time::Duration::from_millis(450));
+
+    // Subsequent retry while process is running:
+    let retry_opts = LaunchOptions::synthetic_test(Some(slow_bin)).with_timeout(2000);
+    let retry_res = launch_desktop_with_options(&paths, "work", &retry_opts);
+    match retry_res {
+        Ok(proc) => {
+            terminate_pid(proc.pid);
+        }
+        Err(e) => {
+            let retry_msg = e.to_string();
+            assert!(
+                retry_msg.contains("already running")
+                    || retry_msg.contains("still running or starting")
+                    || retry_msg.contains("is running"),
+                "expected duplicate prevention on retry, got: {retry_msg}"
+            );
+        }
+    }
+
+    if let codex_dock_core::platform::process::DiscoveryOutcome::ManagedProfile(proc) =
+        codex_dock_core::platform::process::query_profile(&paths, "work")
+    {
+        terminate_pid(proc.pid);
+    }
+}
+
+#[test]
+fn invisible_running_process_prevents_duplicate_on_retry() {
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (paths, tmp) = setup_test_env("invisible-running");
+    create_mock_account(&paths, "work");
+
+    let mock_bin = get_mock_desktop_binary(tmp.path(), false);
+    // Require window activation with short timeout (mock-desktop has no GUI window)
+    let opts = LaunchOptions::synthetic_test(Some(mock_bin.clone()))
+        .with_window_activation(true)
+        .with_timeout(200);
+
+    let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
+    let msg = err.to_string();
+    #[cfg(target_os = "linux")]
+    assert!(
+        msg.contains("no window could be shown") || msg.contains("running in background"),
+        "expected invisible window error, got: {msg}"
+    );
+
+    // Retry must detect running process and refuse duplicate launch:
+    let retry_opts = LaunchOptions::synthetic_test(Some(mock_bin))
+        .with_window_activation(false)
+        .with_timeout(2000);
+    let retry_err = launch_desktop_with_options(&paths, "work", &retry_opts).unwrap_err();
+    let retry_msg = retry_err.to_string();
+    assert!(
+        retry_msg.contains("already running")
+            || retry_msg.contains("still running or starting")
+            || retry_msg.contains("is running"),
+        "expected duplicate prevention on retry, got: {retry_msg}"
+    );
+
+    if let codex_dock_core::platform::process::DiscoveryOutcome::ManagedProfile(proc) =
+        codex_dock_core::platform::process::query_profile(&paths, "work")
+    {
+        terminate_pid(proc.pid);
+    }
+}
+
+#[test]
+fn crashed_startup_allows_subsequent_retry_to_succeed() {
+    let _lock = LAUNCH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let (paths, tmp) = setup_test_env("crashed-retry");
+    create_mock_account(&paths, "work");
+
+    let fail_bin = get_mock_desktop_binary(tmp.path(), true);
+    let fail_opts = LaunchOptions::synthetic_test(Some(fail_bin)).with_timeout(2000);
+
+    let err = launch_desktop_with_options(&paths, "work", &fail_opts).unwrap_err();
+    assert!(err.to_string().contains("exited before opening a window"));
+
+    // Retry with valid mock desktop succeeds cleanly:
+    let valid_bin = get_mock_desktop_binary(tmp.path(), false);
+    let valid_opts = LaunchOptions::synthetic_test(Some(valid_bin)).with_timeout(5000);
+
+    let w = launch_desktop_with_options(&paths, "work", &valid_opts)
+        .expect("retry after crash should succeed");
+    assert_eq!(w.account, "work");
+    terminate_pid(w.pid);
+}
+
+#[test]
+fn profile_symlink_escape_is_rejected() {
+    let (paths, tmp) = setup_test_env("symlink-escape");
+    let outside_dir = tmp.path().join("outside");
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    #[cfg(unix)]
+    {
+        let symlink_path = paths.profiles.join("escaped");
+        std::os::unix::fs::symlink(&outside_dir, &symlink_path).unwrap();
+
+        let opts = LaunchOptions::synthetic_test(None);
+        let err = launch_desktop_with_options(&paths, "escaped", &opts).unwrap_err();
+        assert!(
+            err.to_string().contains("escapes managed profiles root"),
+            "expected profile escape rejection, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn repair_lock_error_is_not_silently_ignored() {
+    let (paths, _tmp) = setup_test_env("repair-lock-error");
+    create_mock_account(&paths, "work");
+
+    let repair_lock = paths.base.join(".dock-repair.lock");
+    fs::write(&repair_lock, "corrupt").unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&repair_lock).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&repair_lock, perms.clone()).unwrap();
+
+        let opts = LaunchOptions::synthetic_test(None);
+        let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot verify repair lock"),
+            "expected repair lock verification error, got: {err}"
+        );
+
+        // restore permissions for cleanup
+        perms.set_mode(0o600);
+        let _ = fs::set_permissions(&repair_lock, perms);
+    }
+}
+
+#[test]
+fn production_capability_cannot_be_bypassed_without_synthetic_test_flag() {
+    let (paths, _tmp) = setup_test_env("prod-capability-enforcement");
+    create_mock_account(&paths, "work");
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        // Default options (synthetic_test = false) must enforce platform capabilities
+        let opts = LaunchOptions::default();
+        let err = launch_desktop_with_options(&paths, "work", &opts).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("desktop launch is not supported on this platform"),
+            "expected platform capability rejection, got: {err}"
+        );
+    }
 }
