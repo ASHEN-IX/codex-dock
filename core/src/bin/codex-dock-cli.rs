@@ -280,8 +280,7 @@ fn main() {
         Some("launch") => match args.get(1) {
             Some(name) => match windows::launch(&p, name) {
                 Ok(w) => {
-                    let pid = w.pid;
-                    println!("opened window (pid {pid})");
+                    println!("opened window ({})", running_line(&w));
                     0
                 }
                 Err(e) => {

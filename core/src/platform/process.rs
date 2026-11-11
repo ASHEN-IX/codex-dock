@@ -666,8 +666,8 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
     }
 }
 
-/// Query Codex process status for a specific managed account.
-pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
+/// Query Codex process status for a specific managed profile.
+pub fn query_profile(p: &Paths, profile_name: &str) -> DiscoveryOutcome {
     if !supported() {
         return DiscoveryOutcome::Unsupported(
             "native process discovery is not supported on this platform".to_string(),
@@ -679,9 +679,9 @@ pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
         Err(e) => return DiscoveryOutcome::InspectionIncompleteOrDenied(e.to_string()),
     };
 
-    // First check if a process confidently belongs to this account:
+    // First check if a process confidently belongs to this profile:
     for proc in &report.processes {
-        if proc.attribution == ProfileAttribution::Known(account_name.to_string()) {
+        if proc.attribution == ProfileAttribution::Known(profile_name.to_string()) {
             return DiscoveryOutcome::ManagedProfile(proc.clone());
         }
     }
@@ -703,6 +703,11 @@ pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
     }
 
     DiscoveryOutcome::NoCodexProcess
+}
+
+/// Backward-compatibility alias for [`query_profile`].
+pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
+    query_profile(p, account_name)
 }
 
 #[cfg(target_os = "linux")]

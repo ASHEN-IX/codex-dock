@@ -3,7 +3,7 @@
 use crate::accounts;
 use crate::error::{Error, Result};
 use crate::paths::Paths;
-use crate::platform::process::{query_account, DiscoveryOutcome};
+use crate::platform::process::{query_profile, DiscoveryOutcome};
 use crate::windows::WindowProc;
 use std::path::{Path, PathBuf};
 
@@ -221,7 +221,7 @@ pub fn launch_desktop_with_options(
     )?;
 
     // 3. Pre-flight process discovery: avoid duplicate launch and refuse ambiguous or incomplete states
-    match query_account(p, name) {
+    match query_profile(p, name) {
         DiscoveryOutcome::ManagedProfile(proc) => {
             if crate::platform::capabilities().window_activation == crate::platform::Support::Yes {
                 #[cfg(target_os = "linux")]
@@ -308,6 +308,8 @@ pub fn launch_desktop_with_options(
         }
     })?;
 
+    let child_pid = child.id();
+
     // 8. Startup verification loop: wait for process discovery to attribute the process
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(options.startup_timeout_ms);
@@ -322,7 +324,7 @@ pub fn launch_desktop_with_options(
             }
         }
 
-        if let DiscoveryOutcome::ManagedProfile(proc) = query_account(p, name) {
+        if let DiscoveryOutcome::ManagedProfile(proc) = query_profile(p, name) {
             if crate::platform::capabilities().window_activation == crate::platform::Support::Yes
                 && options.require_window_activation
             {
@@ -330,7 +332,7 @@ pub fn launch_desktop_with_options(
                 {
                     if crate::windows::focus_pid(proc.pid) {
                         verified_proc = Some(WindowProc {
-                            pid: proc.pid,
+                            pid: child_pid,
                             account: name.to_string(),
                             user_data_dir: proc
                                 .user_data_dir
@@ -342,7 +344,7 @@ pub fn launch_desktop_with_options(
                 #[cfg(not(target_os = "linux"))]
                 {
                     verified_proc = Some(WindowProc {
-                        pid: proc.pid,
+                        pid: child_pid,
                         account: name.to_string(),
                         user_data_dir: proc.user_data_dir.unwrap_or_else(|| p.user_data_dir(name)),
                     });
@@ -350,7 +352,7 @@ pub fn launch_desktop_with_options(
                 }
             } else {
                 verified_proc = Some(WindowProc {
-                    pid: proc.pid,
+                    pid: child_pid,
                     account: name.to_string(),
                     user_data_dir: proc.user_data_dir.unwrap_or_else(|| p.user_data_dir(name)),
                 });
