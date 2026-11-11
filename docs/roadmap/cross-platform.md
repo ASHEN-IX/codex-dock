@@ -170,28 +170,109 @@ restates the Phase 1 audit so T1 has a checklist to verify per OS.
   SQLite file across N windows is exactly what the assignment excludes until
   validated.
 - Rollback rule for any future storage migration (unchanged): backups
-  `~/codex-dock-backup-<stamp>/` hold the displaced originals; repair is
+  `~/codex-dock-backups/<stamp>/` hold the displaced originals; repair is
   idempotent and displaces nothing when re-run (`repair_displaced...` test).
 
 ## 6. Staged plan, acceptance criteria
 
-### T0 — Phase 1 & Phase 1.1 Final Stabilization (this repo state)
+### T0 — Phase 1 & Phase 1.1 Final Stabilization (merged on main)
 Adapters + capability gates + Linux-parity tests + three-OS CI gates + platform safety corrections:
-- **Persistent advisory synchronization locks:** `LockGuard` RAII guards prevent inode-replacement races; lock files (`.create-{name}.lock`, `.dock-repair.lock`, `.desktop-launch.lock`) remain persistent across releases.
+- **Persistent advisory synchronization locks:** `LockGuard` RAII guards prevent inode-replacement races; lock files (`.create-{name}.lock`, `.dock-repair.lock`, `.desktop-launch.lock`, `.login-{name}.lock`) remain persistent across releases.
 - **Native atomic no-replace publication:** `atomic_rename_no_replace` uses `renameat2(RENAME_NOREPLACE)` on Linux and `renameatx_np(RENAME_EXCL)` on macOS, preventing TOCTOU races and pre-existing directory clobbering.
 - **Disabled mutating shared-store repair:** Mutating repair is disabled across CLI, GUI, and public APIs (`Error::MaintenanceUnavailable`) to prevent active-writer hazards; read-only diagnostics (`store::inspect`, `db::quick_check`) use `sqlite3 -readonly` and guarantee byte preservation.
 - **Account lifecycle data integrity:** Account creation enforces path containment and rollback safety; `accounts::remove` synchronizes with creation and launch locks, verifies no running windows, and moves profiles and user data to dated backup directories rather than deleting.
+- **Lifecycle synchronization:** Login and account removal are synchronized via persistent cross-process `.login-{name}.lock`. Removal refuses fail-closed while login is in-flight.
 - **Isolation-only runtime behavior for macOS and Windows:** Unvalidated platforms remain in isolation-only mode without executing unverified shared-store operations.
-- Acceptance: 149 core tests pass on Linux; native gates (fmt/test/clippy/check) pass on ubuntu/macos/windows runners; no user data touched anywhere.
+- Acceptance: 154 core tests pass on Linux; native gates pass on ubuntu/macos/windows runners. Merged into `main` via PR #8 (`9ae6eeb`).
 
-### T1 — Verify desktop store parity & storage compatibility on Windows/macOS (manual, capability-gated)
-Prerequisites:
-1. Address the external `sqlite3` CLI dependency (package/bundle SQLite or evaluate embedded engine), as Windows does not ship `sqlite3.exe` on PATH.
-2. Characterize Codex Desktop packaging on macOS (`.app` bundle structure, Electron sandbox boundaries, symlink traversal constraints).
-3. Characterize Codex Desktop packaging on Windows (`%LOCALAPPDATA%\Programs\Codex`, directory junctions vs symlinks, NTFS mandatory locking).
-4. Analyze concurrent SQLite WAL multi-window checkpointing hazards: evaluate `SQLITE_BUSY` when multiple windows read/write shared WAL pages.
-5. On disposable accounts: confirm which `CODEX_HOME` files the desktop writes on each OS, whether `--user-data-dir` is honored, and whether chats (rollouts → projections) behave like Linux. Evidence into this document.
-Acceptance: a table like §4 per OS, or an explicit "unsupported" entry.
+### T1 — Windows & macOS Runtime Compatibility Audit (this milestone)
+
+**Status:** Completed audit, diagnostic validation harness, and synthetic isolation verification.
+**Storage Contract:** macOS and Windows remain strictly in **Isolation-Only Mode** (`shared_store_compatibility: Support::No`). Shared-store linking is not enabled.
+
+#### 1. Platform Compatibility Matrix
+
+| Property | Linux (Ubuntu) | macOS (Darwin) | Windows (Win32) |
+| :--- | :--- | :--- | :--- |
+| **Desktop Executable Locations** | `/usr/bin/chatgpt`, `/usr/local/bin/chatgpt`, AppImage | `/Applications/Codex.app/Contents/MacOS/Codex`, `/Applications/ChatGPT.app/Contents/MacOS/ChatGPT` | `%LOCALAPPDATA%\Programs\Codex\Codex.exe`, `%ProgramFiles%\Codex\Codex.exe` |
+| **CLI Executable Locations** | `/usr/bin/codex`, `~/.local/bin/codex`, `/usr/lib/chatgpt/resources/codex` | `/usr/local/bin/codex`, `/opt/homebrew/bin/codex`, `Codex.app/Contents/Resources/codex` | `%USERPROFILE%\.cargo\bin\codex.exe`, `%APPDATA%\npm\codex.cmd`, `Codex\resources\codex.exe` |
+| **Default Config / User-Data Root** | `~/.config/Codex-{name}` | `~/Library/Application Support/Codex-{name}` | `%APPDATA%\Codex-{name}` (`AppData/Roaming`) |
+| **Base Profile Directory** | `~/.codex` | `~/.codex` | `%USERPROFILE%\.codex` |
+| **Managed Profiles Root** | `~/.codex-profiles/` | `~/.codex-profiles/` | `%USERPROFILE%\.codex-profiles\` |
+| **`sqlite3` System Availability** | Pre-installed (`/usr/bin/sqlite3`) | Pre-installed (`/usr/bin/sqlite3`) | **MISSING by default** (requires bundling or external winget/choco) |
+| **Filesystem Symlinks** | POSIX symlinks (`Support::Yes`) | POSIX symlinks (`Support::Yes`) | Requires Developer Mode / elevation (`Support::No`) |
+| **Shared Store Compatibility** | `Support::Yes` (validated on Linux) | `Support::No` (unvalidated multi-writer hazards) | `Support::No` (mandatory NTFS locking & no unprivileged file symlinks) |
+| **Native Process Discovery** | `Support::Yes` (`/proc` procfs) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
+| **Window Activation** | `Support::Yes` (KWin / wmctrl) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
+| **Safe Desktop Launch** | `Support::Yes` (direct spawn + procfs sync) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
+
+#### 2. Storage Compatibility Analysis & Hazards
+
+- **macOS Analysis:**
+  - APFS supports POSIX symlinks without elevation. However, macOS Codex Desktop runs inside a hardened runtime / App Sandbox (`com.apple.security.app-sandbox`). Traversing symlinks outside application container directories risks sandbox violations.
+  - SQLite WAL mode on macOS uses POSIX advisory file locks. Multi-process concurrent access from separate Electron instances frequently triggers `SQLITE_BUSY` during checkpointing.
+  - Derived projection divergence (`thread_history_1.sqlite` with byte offsets into `sessions/*.jsonl`) means sharing rollouts while projections diverge leads to inconsistent chat rendering.
+  - **Decision:** macOS remains in **Isolation-Only Mode** (`Support::No`).
+
+- **Windows Analysis:**
+  - NTFS enforces mandatory file locking on open write handles. Two Codex Desktop instances opening `state_5.sqlite` or WAL files concurrently encounter `ERROR_SHARING_VIOLATION` (error 32).
+  - Windows NTFS has no unprivileged file symbolic links; creating symlinks requires `SeCreateSymbolicLinkPrivilege` (Developer Mode or Admin elevation).
+  - SQLite WAL shared memory mapping (`.shm` file) requires identical security descriptors across processes, failing across different integrity levels.
+  - Windows does not ship `sqlite3.exe` on `%PATH%`.
+  - **Decision:** Windows remains in **Isolation-Only Mode** (`Support::No`).
+
+#### 3. Verified Synthetic Profile Isolation (6 Invariants)
+
+Verified across Linux, macOS, and Windows via `core/tests/platform_t1_audit_test.rs` and `audit::run_synthetic_isolation_check()`:
+1. **`CODEX_HOME` Propagation:** `command_for` sets `CODEX_HOME` pointing strictly to `p.profiles.join(name)`. Profiles never receive base directory or cross-profile paths.
+2. **`--user-data-dir` Isolation:** Per-account user-data arguments adhere strictly to OS conventions (`.config` on Linux, `Library/Application Support` on macOS, `AppData/Roaming` on Windows). No two profiles share cookies, caches, or session storage.
+3. **Profile Persistence:** `accounts::add_account` creates the profile directory in isolation mode; `accounts::list` discovers all configured profiles.
+4. **Credential Separation:** `auth.json` in each profile is a regular, independent file (never symlinked or hardlinked). Overwriting one account's credentials leaves other accounts untouched.
+5. **Independent Runtime State:** Lifecycle locks (`.login-{name}.lock`, `.create-{name}.lock`) are strictly per-profile; holding a lock on profile A does not block operations on profile B.
+6. **Rollout & Projection Isolation:** Session transcripts (`sessions/*.jsonl`) and projection stores (`thread_history_1.sqlite`) created in profile A remain local to profile A and never leak into profile B or base.
+
+#### 4. Opt-In Diagnostic Validation Tool
+
+Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
+- Evaluates system capabilities truthfully.
+- Probes installed Desktop, CLI, and SQLite3 binaries with version detection.
+- Reports filesystem roots and user-data templates.
+- Runs non-destructive synthetic profile isolation tests in a temporary sandbox.
+- Sanitizes output (zero credential or private user information disclosure).
+
+#### 5. Manual Smoke-Test Runbook
+
+- **macOS Manual Smoke Test:**
+  1. Install official Codex Desktop / ChatGPT into `/Applications/Codex.app`.
+  2. Verify CLI discovery: `codex-dock doctor`.
+  3. Create disposable account: `codex-dock add test-isolated`.
+  4. Verify profile creation in `~/.codex-profiles/test-isolated` with `auth.json` and `config.toml`.
+  5. Verify that `codex-dock launch test-isolated` refuses fail-closed until Phase T2.
+  6. Sign in via `codex-dock login test-isolated` and verify credentials persist in profile `auth.json` only.
+  7. Clean up: `codex-dock remove test-isolated`.
+
+- **Windows Manual Smoke Test:**
+  1. Install official Codex Desktop into `%LOCALAPPDATA%\Programs\Codex\Codex.exe`.
+  2. Install `sqlite3.exe` (via `winget install SQLite.SQLite` or bundle).
+  3. Verify discovery: `codex-dock doctor`.
+  4. Create disposable account: `codex-dock add test-isolated`.
+  5. Verify profile creation in `%USERPROFILE%\.codex-profiles\test-isolated`.
+  6. Verify launch refusal fail-closed (`desktop launch is not supported here...`).
+  7. Sign in via `codex-dock login test-isolated`.
+  8. Clean up: `codex-dock remove test-isolated`.
+
+#### 6. Explicit Blockers for Production Windows/macOS Support
+
+1. **`sqlite3` Dependency on Windows:** Production installer must bundle SQLite3 or Dock core must embed SQLite (via `rusqlite` / `sqlx`).
+2. **Phase T2 Native Process Discovery:** Windows Win32 process enumeration (`EnumProcesses` / `CreateToolhelp32Snapshot`) and macOS process scanning (`libproc` / `kinfo_proc`) must be implemented before safe launch deduplication can be enabled.
+3. **Phase T2 Window Management:** Cocoa AppleScript / NSWorkspace window activation on macOS and Win32 `SetForegroundWindow` on Windows.
+4. **Code Signing:** Windows Authenticode signing and macOS Apple Developer ID notarization required before binary distribution.
+
+#### 7. Phase T2 Implementation Recommendations
+
+- **T2.1 (macOS Process Discovery & Window Focus):** Implement native process scanning using `libproc` or `sysctl(KERN_PROC)` to inspect process command line arguments (`--user-data-dir=`). Implement window activation via Cocoa / AppleScript.
+- **T2.2 (Windows Process Discovery & Window Focus):** Implement Win32 process enumeration and read remote command lines via `NtQueryInformationProcess` (`ProcessCommandLineInformation`). Implement window activation via `EnumWindows` and `SetForegroundWindow`.
+- **Maintain Invariants:** Keep Windows and macOS in isolation-only mode throughout Phase T2. Ensure all 6 isolation invariants remain strictly enforced.
 
 ### T2 — Native process enumeration where it is worth it
 Only after T1: macOS (NSWorkspace / `ps` fallback) and Windows

@@ -82,10 +82,16 @@ Artifacts need distribution-specific runtime validation before declaring support
 - **Left-click the tray** to open the dashboard; right-click for the menu.
 - **Opening an account** raises its Codex window if it is already open, and
   only launches a new one otherwise. Dashboard, tray, and CLI use the same
-  serialized launch path, including windows opened outside Dock.
-- **One row per account.** Profiles with the same signed-in account identity
-  appear once. A named profile takes precedence over a `default` alias; all
-  profile directories and credentials remain on disk.
+  serialized launch path, including windows opened outside Dock. On KDE,
+  opening a window switches to its virtual desktop. A running process without
+  an accessible window is reported as an error instead of a successful open.
+- **One row per named profile.** Named profiles remain visible and open their
+  own windows even when their current sign-in identities match. A matching
+  `default` alias is hidden in favor of a named profile; all profile directories
+  and credentials remain on disk.
+- **Sign-in opens your browser.** Keep Dock's device-code dialog open, enter
+  its code in the browser, and approve the connection. Logging in to the
+  ChatGPT website alone does not save credentials for a Dock profile.
 
 The headless CLI needs no GUI stack:
 
@@ -144,7 +150,8 @@ account the window is on) is preserved.
 | **split store** | a profile DB has threads the shared DB also has | merge with `INSERT OR IGNORE`, repoint `rollout_path`, preserve the old file |
 
 Every mutation is move-then-link. Nothing is deleted; displaced files go to
-`~/codex-dock-backup-<timestamp>/`.
+`~/codex-dock-backups/<timestamp>/`, one directory per operation under a
+single root.
 
 Mutating shared-store repair is disabled in Phase 1.1 to protect against concurrent-writer
 hazards and WAL coordination races while Codex windows may be open or background tasks running.

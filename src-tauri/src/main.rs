@@ -147,6 +147,65 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+fn dashboard_navigation_allowed(url: &tauri::Url) -> bool {
+    (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"))
+        || url.as_str() == "about:blank"
+}
+
+fn login_browser_command(url: &str) -> Result<std::process::Command, String> {
+    let parsed = tauri::Url::parse(url).map_err(|_| "Invalid sign-in URL".to_string())?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("auth.openai.com")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || !matches!(parsed.path(), "/codex/device" | "/codex/device/")
+    {
+        return Err("Unexpected device sign-in URL".to_string());
+    }
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    };
+    command.arg(parsed.as_str());
+    Ok(command)
+}
+
+/// Open only the URL issued for this profile's pending login. The dashboard
+/// stays on its local page so polling and cancellation continue to work.
+#[tauri::command]
+fn open_login_url(name: String, state: tauri::State<'_, LoginState>) -> Result<(), String> {
+    let url = {
+        let map = state
+            .0
+            .lock()
+            .map_err(|_| "Login state unavailable".to_string())?;
+        map.get(&name)
+            .filter(|login| !login.done)
+            .and_then(|login| login.url.clone())
+            .ok_or_else(|| "Start a fresh sign-in to get a browser link".to_string())?
+    };
+    let mut command = login_browser_command(&url)?;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Could not open your browser: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Create an account with safe preflight and transaction rollback.
 /// On supported platforms (Linux), links the shared store.
 /// On unverified platforms (Windows, macOS), uses isolation-only behavior.
@@ -564,22 +623,24 @@ fn perform_ping(app: &tauri::AppHandle, account: &str) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-fn open_window(account: String) -> Result<u32, String> {
-    let p = Paths::real();
-    // Opening a signed-out profile only shows Codex's own sign-in screen under a
-    // name that reads as ready.
-    let logged_in = accounts::list(&p)
-        .unwrap_or_default()
-        .into_iter()
-        .any(|a| a.name == account && a.logged_in);
-    if !logged_in {
-        return Err(format!(
-            "'{account}' is not signed in yet — sign in from Codex Dock first"
-        ));
-    }
-    windows::launch(&p, &account)
-        .map(|w| w.pid)
-        .map_err(|e| e.to_string())
+async fn open_window(account: String) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = Paths::real();
+        let logged_in = accounts::list(&p)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .any(|a| a.name == account && a.logged_in);
+        if !logged_in {
+            return Err(format!(
+                "'{account}' is not signed in yet — sign in from Codex Dock first"
+            ));
+        }
+        windows::launch(&p, &account)
+            .map(|w| w.pid)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Could not open account window: {e}"))?
 }
 
 #[tauri::command]
@@ -626,6 +687,12 @@ fn refresh_tray(
 
 fn main() {
     let mut builder = tauri::Builder::default();
+
+    builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry>::new("dashboard-navigation")
+            .on_navigation(|_, url| dashboard_navigation_allowed(url))
+            .build(),
+    );
 
     // One dock per session. A second launch (double-clicking the shortcut again)
     // raises the running window instead of starting a duplicate tray icon.
@@ -797,6 +864,7 @@ fn main() {
             account_list,
             add_account,
             start_login,
+            open_login_url,
             login_status,
             cancel_login,
             delete_account,
@@ -815,6 +883,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_cannot_be_replaced_by_a_login_or_chatgpt_page() {
+        for url in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "about:blank",
+        ] {
+            assert!(dashboard_navigation_allowed(
+                &tauri::Url::parse(url).unwrap()
+            ));
+        }
+        for url in [
+            "https://auth.openai.com/codex/device",
+            "https://chatgpt.com/",
+            "https://tauri.localhost.example.com/",
+            "file:///tmp/index.html",
+        ] {
+            assert!(!dashboard_navigation_allowed(
+                &tauri::Url::parse(url).unwrap()
+            ));
+        }
+    }
+
+    #[test]
+    fn browser_opener_accepts_only_the_expected_device_login_endpoint() {
+        let url = "https://auth.openai.com/codex/device";
+        let command = login_browser_command(url).unwrap();
+        assert_eq!(command.get_args().last().unwrap(), url);
+        for bad in [
+            "http://auth.openai.com/codex/device",
+            "https://auth.openai.com.example.com/codex/device",
+            "https://user@auth.openai.com/codex/device",
+            "https://auth.openai.com:444/codex/device",
+            "https://auth.openai.com/other",
+            "file:///tmp/login",
+            "--help",
+        ] {
+            assert!(login_browser_command(bad).is_err(), "accepted {bad}");
+        }
+    }
 
     fn tmp(tag: &str) -> std::path::PathBuf {
         let t = std::env::temp_dir().join(format!("cd-tauri-{}-{}", tag, std::process::id()));

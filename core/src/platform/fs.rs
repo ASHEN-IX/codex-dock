@@ -85,7 +85,10 @@ pub fn is_executable(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         matches!(
-            path.extension().and_then(|e| e.to_str()),
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                .as_deref(),
             Some("exe") | Some("bat") | Some("cmd") | Some("lnk")
         ) && std::fs::metadata(path)
             .map(|m| m.is_file())

@@ -57,7 +57,7 @@ pub fn profiles(p: &Paths) -> Result<Vec<Account>> {
     Ok(out)
 }
 
-/// Display one row per signed-in identity. Preserve every profile on disk.
+/// Keep named profiles visible; collapse only a matching default alias.
 pub fn list(p: &Paths) -> Result<Vec<Account>> {
     let mut all = profiles(p)?;
     // A named profile with private credentials is preferable to a default alias.
@@ -70,10 +70,10 @@ pub fn list(p: &Paths) -> Result<Vec<Account>> {
     });
     let mut out: Vec<Account> = Vec::new();
     for a in all {
-        let duplicate = a
-            .account_id
-            .as_ref()
-            .is_some_and(|id| out.iter().any(|b| b.account_id.as_ref() == Some(id)));
+        let duplicate = a.name == "default"
+            && a.account_id
+                .as_ref()
+                .is_some_and(|id| out.iter().any(|b| b.account_id.as_ref() == Some(id)));
         if !duplicate {
             out.push(a);
         }
@@ -88,6 +88,9 @@ pub fn canonical_name(p: &Paths, name: &str) -> Result<String> {
         .iter()
         .find(|a| a.name == name)
         .ok_or_else(|| Error::Msg(format!("unknown account '{name}'")))?;
+    if name != "default" {
+        return Ok(name.to_string());
+    }
     if let Some(id) = &account.account_id {
         if let Some(canonical) = list(p)?
             .into_iter()

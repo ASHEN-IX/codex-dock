@@ -326,10 +326,11 @@ fn check_proc_file_handles_and_locks(proc_root: &Path, target_paths: &[PathBuf])
         let fd_dir = entry.path().join("fd");
         let fd_rd = match std::fs::read_dir(&fd_dir) {
             Ok(r) => r,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::NotFound
-                    || e.kind() == std::io::ErrorKind::PermissionDenied =>
-            {
+            // A pid reaped since read_dir is routine churn, not a broken table.
+            // Reading its fd directory fails with ESRCH, which std reports as
+            // ErrorKind::Uncategorized rather than NotFound.
+            Err(e) if crate::windows::process_exited(&entry.path(), &e) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 continue;
             }
             Err(e) => {

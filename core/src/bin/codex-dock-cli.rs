@@ -242,11 +242,18 @@ fn cmd_login(p: &Paths, name: &str) -> i32 {
     }
 }
 
+fn cmd_audit(p: &Paths) -> i32 {
+    let audit = codex_dock_core::audit::audit_platform(p);
+    println!("{}", codex_dock_core::audit::format_audit_report(&audit));
+    0
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let p = Paths::real();
     let code = match args.first().map(|s| s.as_str()) {
         Some("status") | None => cmd_status(&p),
+        Some("doctor") | Some("audit") => cmd_audit(&p),
         Some("list") => {
             for a in accounts::list(&p).unwrap_or_default() {
                 println!("{}", a.name);
@@ -314,7 +321,7 @@ fn main() {
             eprintln!("unknown command '{other}'");
             eprintln!(
                 "commands: status | list | usage | add <name> [clone] | remove <name> | \
-                 login <name> | repair (disabled) | launch <name> | running [name]"
+                 login <name> | doctor | repair (disabled) | launch <name> | running [name]"
             );
             1
         }

@@ -75,6 +75,26 @@ fn default_alias_is_one_account_and_named_profile_wins() {
 }
 
 #[test]
+fn named_profiles_remain_visible_and_selectable_when_sign_in_identities_match() {
+    let t = tmp("named-same-identity");
+    let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));
+    let auth = r#"{"tokens":{"account_id":"same"}}"#;
+    for name in ["default", "third", "work"] {
+        fixture(&t, name, Some(auth));
+    }
+    let names: Vec<_> = accounts::list(&p)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, vec!["third", "work"]);
+    assert_eq!(accounts::canonical_name(&p, "work").unwrap(), "work");
+    assert_eq!(accounts::canonical_name(&p, "third").unwrap(), "third");
+    assert_eq!(accounts::canonical_name(&p, "default").unwrap(), "third");
+    std::fs::remove_dir_all(t).unwrap();
+}
+
+#[test]
 fn separate_signed_out_profiles_are_not_collapsed() {
     let t = tmp("signed-out");
     let p = Paths::new(t.join(".codex"), t.join(".codex-profiles"));

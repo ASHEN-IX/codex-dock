@@ -278,7 +278,8 @@
       <li id="stepCode">Enter the one-time code below</li>
     </ol>
     <div class="code waiting" id="loginCode">starting…</div>
-    <a id="loginUrl" href="#" hidden></a>
+    <button type="button" class="primary" id="loginUrl" hidden>Open browser to sign in</button>
+    <p>Keep this window open. Enter the code in your browser and approve the connection to finish signing in.</p>
     <div class="prog" id="loginProg"><i></i></div>
     <div class="row">
       <button type="button" class="ghost" data-cancel-login>Cancel</button>
@@ -444,9 +445,11 @@ async function render() {
     b.addEventListener('click', async () => {
       const account = b.dataset.account;
       b.disabled = true;
+      b.textContent = 'Opening…';
       try { await invoke('open_window', { account }); }
       catch (e) { banner(`<div class="banner"><span>${esc(e)}</span></div>`); }
       b.disabled = false;
+      b.textContent = 'Open';
     });
   });
 
@@ -527,7 +530,7 @@ async function beginLogin(name) {
   code.className = 'code waiting';
   code.textContent = 'starting…';
   link.hidden = true;
-  link.textContent = '';
+  link.textContent = 'Open browser to sign in';
   $('stepOpen').className = '';
   $('stepCode').className = '';
   prog.hidden = false;
@@ -548,8 +551,6 @@ async function beginLogin(name) {
     try { st = await invoke('login_status', { name }); }
     catch { return; }
     if (st.url && link.hidden) {
-      link.href = st.url;
-      link.textContent = st.url;
       link.hidden = false;
     }
     if (st.code) {
@@ -580,6 +581,15 @@ async function beginLogin(name) {
     }
   }, 1000);
 }
+
+$('loginUrl').addEventListener('click', async () => {
+  const name = $('loginDlg').dataset.account;
+  try {
+    await invoke('open_login_url', { name });
+  } catch (e) {
+    banner(`<div class="banner"><span>Could not open sign-in: ${esc(e)}</span></div>`);
+  }
+});
 
 function loginDlgClose() {
   clearInterval(loginPoll);
