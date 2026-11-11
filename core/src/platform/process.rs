@@ -125,14 +125,10 @@ pub fn parse_unicode_string_buffer(buf: &[u8]) -> Option<String> {
     }
 
     let base_addr = buf.as_ptr() as usize;
-    let offset = if ptr_val >= base_addr {
-        ptr_val.checked_sub(base_addr)?
-    } else if ptr_val >= header_size && ptr_val <= buf.len() {
-        // Fallback for relative offsets (e.g. synthetic test fixtures)
-        ptr_val
-    } else {
+    if ptr_val < base_addr {
         return None;
-    };
+    }
+    let offset = ptr_val.checked_sub(base_addr)?;
 
     if offset < header_size || (offset & 1) != 0 {
         return None;

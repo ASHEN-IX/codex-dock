@@ -67,7 +67,7 @@ impl ProcessSnapshotEnumerator for LiveSnapshotEnumerator {
             Ok(true)
         } else {
             let err = unsafe { GetLastError() };
-            if err == ERROR_NO_MORE_FILES || err == 0 {
+            if err == ERROR_NO_MORE_FILES {
                 Ok(false)
             } else {
                 Err(err)
@@ -82,7 +82,7 @@ impl ProcessSnapshotEnumerator for LiveSnapshotEnumerator {
             Ok(true)
         } else {
             let err = unsafe { GetLastError() };
-            if err == ERROR_NO_MORE_FILES || err == 0 {
+            if err == ERROR_NO_MORE_FILES {
                 Ok(false)
             } else {
                 Err(err)
@@ -523,6 +523,30 @@ mod tests {
             "clean scan termination must be complete"
         );
         assert!(report.warnings.is_empty());
+    }
+
+    #[test]
+    fn enumeration_failure_with_error_code_zero_marks_scan_incomplete() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("cd-win-enum-err0-{}", std::process::id()));
+        let paths = Paths::new(temp_dir.join("base"), temp_dir.join("profiles"));
+
+        // If Process32FirstW returns FALSE and GetLastError() returns 0,
+        // it must NOT be treated as clean termination (only ERROR_NO_MORE_FILES is documented).
+        let mock = MockSnapshotEnumerator {
+            first_result: Err(0),
+            next_results: vec![],
+            next_index: 0,
+        };
+
+        let report = scan_processes_with_enumerator(&paths, mock, None).unwrap();
+        assert!(report.processes.is_empty());
+        assert!(
+            !report.is_complete,
+            "scan must be incomplete when Process32FirstW fails even if error code is 0"
+        );
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Process32FirstW failed: error code 0"));
     }
 
     #[test]
