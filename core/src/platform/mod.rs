@@ -22,6 +22,7 @@
 //! differences are.
 
 pub mod fs;
+pub mod launch;
 pub mod process;
 
 use crate::error::{Error, Result};

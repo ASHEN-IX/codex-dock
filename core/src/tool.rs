@@ -411,7 +411,7 @@ pub fn sqlite3_version(binary: &Path) -> Option<String> {
     text.split_whitespace().next().map(|s| s.to_string())
 }
 
-fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     crate::platform::fs::is_executable(path)
 }
 
