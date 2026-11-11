@@ -232,14 +232,11 @@ fn query_account_reports_explicit_discovery_outcomes() {
 
     // With no processes running for this test profile:
     let outcome = process::query_account(&p, "nonexistent-profile");
-    assert!(
-        matches!(
-            outcome,
-            DiscoveryOutcome::NoCodexProcess | DiscoveryOutcome::UnknownProfile(_)
-        ),
-        "outcome must be explicit: {:?}",
-        outcome
+    let is_explicit = matches!(
+        outcome,
+        DiscoveryOutcome::NoCodexProcess | DiscoveryOutcome::UnknownProfile(_)
     );
+    assert!(is_explicit, "outcome must be an explicit discovery variant");
 
     std::fs::remove_dir_all(cleanup).ok();
 }
