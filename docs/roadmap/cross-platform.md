@@ -56,7 +56,7 @@ Every platform-sensitive operation in the tree, and where it lives now:
   | `filesystem_symlinks` | Yes | Yes (POSIX symlinks available) | No (needs Developer Mode / elevation) |
   | `shared_store_compatibility` | Yes (validated on Linux) | No (unvalidated runtime; profiles stay isolated) | No (unvalidated runtime; profiles stay isolated) |
   | `native_process_discovery` | Yes (procfs `/proc`) | Yes (native `libproc` & `sysctl`; synthetic verified, real desktop unverified) | Yes (Win32 Toolhelp32 & `QueryFullProcessImageNameW`; synthetic verified, real desktop unverified) |
-  | `window_activation` | Yes (KWin/wmctrl) | No (not implemented yet) | No (not implemented yet) |
+  | `window_activation` | Yes (KWin/wmctrl) | No (native adapter implemented; official runtime validation pending) | No (native adapter implemented; official runtime validation pending) |
   | `safe_desktop_launch` | Yes (verified desktop exec) | No (official application bundle runtime validation pending) | No (official desktop runtime validation pending) |
 
 - `require(support, feature)` turns `No` into a user-readable refusal. Refusing
@@ -203,8 +203,8 @@ Adapters + capability gates + Linux-parity tests + three-OS CI gates + platform 
 | **Filesystem Symlinks** | POSIX symlinks (`Support::Yes`) | POSIX symlinks (`Support::Yes`) | Requires Developer Mode / elevation (`Support::No`) |
 | **Shared Store Compatibility** | `Support::Yes` (validated on Linux) | `Support::No` (unvalidated multi-writer hazards) | `Support::No` (mandatory NTFS locking & no unprivileged file symlinks) |
 | **Native Process Discovery** | `Support::Yes` (`/proc` procfs) | `Support::Yes` (`libproc` & `sysctl`) | `Support::Yes` (Win32 Toolhelp32 & `QueryFullProcessImageNameW`) |
-| **Window Activation** | `Support::Yes` (KWin / wmctrl) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
-| **Safe Desktop Launch** | `Support::Yes` (direct spawn + procfs sync) | `Support::No` (T2 implementation required) | `Support::No` (T2 implementation required) |
+| **Window Activation** | `Support::Yes` (KWin / wmctrl) | `Support::No` (official runtime validation pending) | `Support::No` (official runtime validation pending) |
+| **Safe Desktop Launch** | `Support::Yes` (direct spawn + procfs sync) | `Support::No` (official runtime validation pending) | `Support::No` (official runtime validation pending) |
 
 #### 2. Storage Compatibility Analysis & Hazards
 
@@ -322,8 +322,17 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
   - `shared_store_compatibility` remains disabled (`Support::No`); profiles remain strictly isolated.
   - Profile removal on Windows and macOS remains disabled until end-to-end lifecycle safety is established.
 
-#### T2.3 (Future milestone) — Native Window Activation (Windows & macOS)
-Pending window activation (Cocoa / Win32 `SetForegroundWindow` / `EnumWindows`).
+#### T2.3 — Native Window Activation (Windows & macOS)
+Native adapters and injectable policy tests are implemented; official runtime validation remains pending. No production capability is enabled.
+
+- `platform::activation::activate_profile` gates production calls, requires a complete native process report, rejects unknown/candidate/helper identities and multiple main PIDs for the requested account, and selects only standard windows owned by that verified PID.
+- Windows enumerates top-level HWNDs using `EnumWindows` and `GetWindowThreadProcessId`; excludes owned dialogs, tool/no-activate windows, non-Electron classes, and small helper surfaces. It restores hidden/minimized windows with `ShowWindow`, requests activation with `SetForegroundWindow`, and verifies the actual `GetForegroundWindow` result and non-cloaked DWM visibility. It never attaches input queues or overrides foreground restrictions.
+- macOS resolves `NSRunningApplication` by verified PID, enumerates Accessibility windows, requires standard window roles and `AXUIElementGetPid` ownership, then unhides/unminimizes and raises the selected window. Success requires both AppKit active state and live system Accessibility focused-application/window evidence, corroborated by an on-screen layer-zero Quartz window with the same PID and uniquely matching bounds. Missing permissions and metadata fail closed without opening a permission prompt.
+- Quartz window information was evaluated: it can corroborate owner PIDs, but a CGWindowID has no public reliable mapping to an actionable AX window reference. AX ownership and standard-window roles are authoritative for selecting the actionable reference; on-screen Quartz owner/bounds metadata corroborates visibility. Multiple AX or Quartz windows with matching bounds are indeterminate and cannot produce success. No private AX/Quartz bridge or title/bundle-name inference is used.
+- Process evidence and window ownership are rechecked before action and throughout bounded foreground verification. A visible modal/dialog surface blocks activation rather than redirecting it. Failed activation never falls back to launch.
+- Linux keeps the existing KWin/X11 focus implementation. T2.2 launch locks, startup records, and retry behavior remain unchanged.
+- `window_activation`, `safe_desktop_launch`, and `shared_store_compatibility` stay `Support::No` on Windows/macOS, including after synthetic CI passes. Debug or explicitly feature-enabled testing uses an isolated API; default-feature release callers cannot bypass the gates through it.
+- See [the opt-in smoke protocol](../testing/native-window-activation.md) for disposable-account validation and the exact commands. CI policy tests and compilation are not evidence of official Desktop runtime behavior.
 
 ### T3 — Linking enablement per OS (shared store)
 Windows only if symlink privilege is validated (Developer Mode test); macOS

@@ -38,6 +38,10 @@ jobs:
         run: cargo test --locked --workspace
       - name: Test production release capability enforcement
         run: cargo test --locked --release -p codex-dock-core --test production_launch_test
+      - name: Test activation policy in release mode
+        run: cargo test --locked --release -p codex-dock-core --lib platform::activation
+      - name: Check explicitly opt-in smoke harness
+        run: cargo check --locked -p codex-dock-core --features synthetic-tests --bin activation-smoke
       - name: Lint the complete workspace
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Native compilation: core library, headless CLI, and Tauri shell behind
