@@ -59,11 +59,11 @@ jobs:
       - uses: ./.github/actions/setup-linux
         if: matrix.language == 'rust'
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@93a54aaef5ced74c8d9fae64bdfb97f6a18c21b4 # v4
+        uses: github/codeql-action/init@592d162ba3b2f5a3411d2cbf01df9f82c492f269 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: none
       - name: Analyze
-        uses: github/codeql-action/analyze@93a54aaef5ced74c8d9fae64bdfb97f6a18c21b4 # v4
+        uses: github/codeql-action/analyze@592d162ba3b2f5a3411d2cbf01df9f82c492f269 # v4
         with:
           category: /language:${{ matrix.language }}
