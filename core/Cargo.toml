@@ -10,3 +10,12 @@ serde_json = "1"
 [features]
 # Explicit opt-in for isolated release-mode synthetic integration tests only.
 synthetic-tests = []
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSRunningApplication", "NSApplication"] }
+
+[[bin]]
+name = "activation-smoke"
+path = "src/bin/activation-smoke.rs"
+required-features = ["synthetic-tests"]

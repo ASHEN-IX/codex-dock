@@ -21,6 +21,7 @@
 //! advertised as capabilities; only the seams with real shadow of a doubt
 //! differences are.
 
+pub mod activation;
 pub mod fs;
 pub mod launch;
 pub mod process;
@@ -91,7 +92,7 @@ pub fn capabilities() -> Capabilities {
             ),
             native_process_discovery: Support::Yes,
             window_activation: Support::No(
-                "window activation targets KWin/wmctrl; macOS support is not implemented yet",
+                "native macOS window activation requires official Desktop runtime validation; production activation remains disabled",
             ),
             safe_desktop_launch: Support::No(
                 "desktop launching requires verified official macOS application bundle execution; runtime verification pending",
@@ -109,7 +110,7 @@ pub fn capabilities() -> Capabilities {
             ),
             native_process_discovery: Support::Yes,
             window_activation: Support::No(
-                "window activation is not implemented for Windows yet",
+                "native Windows window activation requires official Desktop runtime validation; production activation remains disabled",
             ),
             safe_desktop_launch: Support::No(
                 "desktop launching requires verified official Windows process execution; runtime verification pending",

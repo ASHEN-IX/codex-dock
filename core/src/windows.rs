@@ -298,23 +298,31 @@ fn detach_from_controlling_terminal(cmd: &mut std::process::Command) {
 }
 
 pub fn focus(account: &str) -> bool {
-    if !crate::platform::process::supported() {
-        return false;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        crate::platform::activation::activate_profile(&Paths::real(), account).is_ok()
     }
-    let p = Paths::real();
-    let name = accounts::canonical_name(&p, account).unwrap_or_else(|_| account.to_string());
-    let Some(proc_root) = crate::platform::process::proc_root() else {
-        return false;
-    };
-    let Some(proc) = running_for(&p, &proc_root)
-        .into_iter()
-        .find(|w| w.account == name)
-    else {
-        return false;
-    };
-    focus_pid(proc.pid)
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if !crate::platform::process::supported() {
+            return false;
+        }
+        let p = Paths::real();
+        let name = accounts::canonical_name(&p, account).unwrap_or_else(|_| account.to_string());
+        let Some(proc_root) = crate::platform::process::proc_root() else {
+            return false;
+        };
+        let Some(proc) = running_for(&p, &proc_root)
+            .into_iter()
+            .find(|w| w.account == name)
+        else {
+            return false;
+        };
+        focus_pid(proc.pid)
+    }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn kwin_window_match_ids(raw: &str) -> Vec<&str> {
     raw.split('"')
         .filter(|id| {
@@ -333,6 +341,7 @@ fn kwin_window_match_ids(raw: &str) -> Vec<&str> {
         .collect()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn focus_kwin_with(pid: u32, mut query: impl FnMut(&[&str]) -> Option<String>) -> bool {
     let Some(matches) = query(&[
         "--literal",
@@ -373,6 +382,7 @@ fn focus_kwin_with(pid: u32, mut query: impl FnMut(&[&str]) -> Option<String>) -
 }
 
 /// Window ids owned by `pid`, as reported by `xdotool search --pid`.
+#[cfg(any(target_os = "linux", test))]
 fn x11_window_ids(pid: u32, run: &mut impl FnMut(&[&str]) -> Option<String>) -> Vec<String> {
     run(&["search", "--pid", &pid.to_string()])
         .map(|out| {
@@ -386,6 +396,7 @@ fn x11_window_ids(pid: u32, run: &mut impl FnMut(&[&str]) -> Option<String>) -> 
 }
 
 /// Area of one X11 window, or `None` if the geometry cannot be read.
+#[cfg(any(target_os = "linux", test))]
 fn x11_window_area(id: &str, run: &mut impl FnMut(&[&str]) -> Option<String>) -> Option<u64> {
     let out = run(&["getwindowgeometry", "--shell", id])?;
     let field = |name: &str| -> u64 {
@@ -399,6 +410,7 @@ fn x11_window_area(id: &str, run: &mut impl FnMut(&[&str]) -> Option<String>) ->
 
 /// A window this small is an Electron helper (tray, offscreen, clipboard), not
 /// the account's real window. The real one is a full page.
+#[cfg(any(target_os = "linux", test))]
 const MIN_ACCOUNT_WINDOW_AREA: u64 = 100_000;
 
 /// Restore and activate a profile window that the compositor never adopted.
@@ -412,6 +424,7 @@ const MIN_ACCOUNT_WINDOW_AREA: u64 = 100_000;
 ///
 /// Mapping is not destructive: an already-mapped window is unaffected, and the
 /// process, its credentials and its chats are untouched.
+#[cfg(any(target_os = "linux", test))]
 fn focus_x11_with(pid: u32, mut run: impl FnMut(&[&str]) -> Option<String>) -> bool {
     let mut windows: Vec<(String, u64)> = x11_window_ids(pid, &mut run)
         .into_iter()
@@ -439,6 +452,7 @@ fn focus_x11_with(pid: u32, mut run: impl FnMut(&[&str]) -> Option<String>) -> b
     false
 }
 
+#[cfg(target_os = "linux")]
 fn focus_x11_pid(pid: u32) -> bool {
     focus_x11_with(pid, |args| {
         std::process::Command::new("xdotool")
@@ -450,6 +464,7 @@ fn focus_x11_pid(pid: u32) -> bool {
     })
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn focus_pid(pid: u32) -> bool {
     // KWin's native window runner restores minimized windows and switches to
     // their virtual desktop. Only report success for a verified window PID.

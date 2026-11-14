@@ -22,6 +22,18 @@ fn ordinary_options_enforce_production_capabilities() {
         platform::capabilities().safe_desktop_launch,
         platform::Support::No(_)
     ) {
+        assert!(matches!(
+            platform::capabilities().window_activation,
+            platform::Support::No(_)
+        ));
+        assert!(matches!(
+            platform::capabilities().shared_store_compatibility,
+            platform::Support::No(_)
+        ));
+        let activation = platform::activation::activate_profile(&p, "work").unwrap_err();
+        assert!(activation
+            .to_string()
+            .contains("window activation is not supported here"));
         for result in [
             launch_desktop_with_options(&p, "work", &options),
             platform::launch::launch_desktop(&p, "work"),
