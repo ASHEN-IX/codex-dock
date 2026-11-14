@@ -12,6 +12,8 @@ use crate::platform::process::ProcessDiscoveryReport;
 ))]
 use crate::platform::process::{DiscoveredProcess, ProcessIdentity, ProfileAttribution};
 
+#[cfg(any(test, target_os = "macos"))]
+mod geometry;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
