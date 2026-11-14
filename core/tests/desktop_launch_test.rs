@@ -58,18 +58,7 @@ fn create_mock_account(p: &Paths, name: &str) -> PathBuf {
 }
 
 fn get_mock_desktop_binary(dir: &Path, fail: bool) -> PathBuf {
-    let mut target_dir = std::env::current_exe().expect("current_exe");
-    target_dir.pop(); // remove deps binary
-    if target_dir.file_name().and_then(|s| s.to_str()) == Some("deps") {
-        target_dir.pop(); // remove "deps" folder to get target/debug
-    }
-
-    let bin_name = if cfg!(windows) {
-        "mock-desktop.exe"
-    } else {
-        "mock-desktop"
-    };
-    let src_bin = target_dir.join(bin_name);
+    let src_bin = Path::new(env!("CARGO_BIN_EXE_mock-desktop"));
 
     let target_name = match (cfg!(windows), fail) {
         (true, false) => "Codex.exe",
@@ -79,40 +68,7 @@ fn get_mock_desktop_binary(dir: &Path, fail: bool) -> PathBuf {
     };
     let dest_bin = dir.join(target_name);
 
-    if src_bin.is_file() {
-        fs::copy(&src_bin, &dest_bin).expect("copy mock desktop");
-    } else {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = if fail {
-                r#"#!/bin/sh
-exit 1
-"#
-            } else {
-                r#"#!/bin/sh
-for arg in "$@"; do
-    case "$arg" in
-        --user-data-dir=*)
-            udir="${arg#--user-data-dir=}"
-            echo "ARGS:$@" > "$udir/launch_record.txt"
-            echo "CODEX_HOME:$CODEX_HOME" >> "$udir/launch_record.txt"
-            ;;
-    esac
-done
-sleep 10
-"#
-            };
-            fs::write(&dest_bin, script).unwrap();
-            let mut perms = fs::metadata(&dest_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&dest_bin, perms).unwrap();
-        }
-        #[cfg(windows)]
-        {
-            panic!("mock-desktop.exe must be compiled at {}", src_bin.display());
-        }
-    }
+    fs::copy(src_bin, &dest_bin).expect("copy Cargo-built mock desktop");
     dest_bin
 }
 
@@ -435,17 +391,7 @@ fn terminate_pid(pid: u32) {
 
 fn get_mock_launcher_binary(dir: &Path, slow: bool) -> PathBuf {
     let _ = get_mock_desktop_binary(dir, false);
-    let mut target_dir = std::env::current_exe().expect("current_exe");
-    target_dir.pop();
-    if target_dir.file_name().and_then(|s| s.to_str()) == Some("deps") {
-        target_dir.pop();
-    }
-    let bin_name = if cfg!(windows) {
-        "mock-desktop.exe"
-    } else {
-        "mock-desktop"
-    };
-    let src_bin = target_dir.join(bin_name);
+    let src_bin = Path::new(env!("CARGO_BIN_EXE_mock-desktop"));
     let target_name = if slow {
         if cfg!(windows) {
             "slow-launcher.exe"
@@ -458,52 +404,7 @@ fn get_mock_launcher_binary(dir: &Path, slow: bool) -> PathBuf {
         "mock-launcher"
     };
     let dest_bin = dir.join(target_name);
-    if src_bin.is_file() {
-        fs::copy(&src_bin, &dest_bin).expect("copy mock launcher");
-    } else {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = if slow {
-                r#"#!/bin/sh
-sleep 0.35
-for arg in "$@"; do
-    case "$arg" in
-        --user-data-dir=*)
-            udir="${arg#--user-data-dir=}"
-            echo "ARGS:$@" > "$udir/launch_record.txt"
-            echo "CODEX_HOME:$CODEX_HOME" >> "$udir/launch_record.txt"
-            ;;
-    esac
-done
-sleep 10 &
-exit 0
-"#
-            } else {
-                r#"#!/bin/sh
-for arg in "$@"; do
-    case "$arg" in
-        --user-data-dir=*)
-            udir="${arg#--user-data-dir=}"
-            echo "ARGS:$@" > "$udir/launch_record.txt"
-            echo "CODEX_HOME:$CODEX_HOME" >> "$udir/launch_record.txt"
-            ;;
-    esac
-done
-sleep 10 &
-exit 0
-"#
-            };
-            fs::write(&dest_bin, script).unwrap();
-            let mut perms = fs::metadata(&dest_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&dest_bin, perms).unwrap();
-        }
-        #[cfg(windows)]
-        {
-            panic!("mock-desktop.exe must be compiled at {}", src_bin.display());
-        }
-    }
+    fs::copy(src_bin, &dest_bin).expect("copy Cargo-built mock launcher");
     dest_bin
 }
 
