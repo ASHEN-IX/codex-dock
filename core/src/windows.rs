@@ -15,6 +15,7 @@ pub struct WindowProc {
     pub pid: u32,
     pub account: String,
     pub user_data_dir: PathBuf,
+    pub launcher_pid: Option<u32>,
 }
 
 const FLAG: &str = "--user-data-dir=";
@@ -59,105 +60,7 @@ pub fn user_data_dir(p: &Paths, name: &str) -> PathBuf {
 }
 
 pub fn launch(p: &Paths, name: &str) -> Result<WindowProc> {
-    let canonical = accounts::canonical_name(p, name)?;
-    if !accounts::safe_segment(&canonical) {
-        return Err(Error::Msg(format!("invalid account name '{canonical}'")));
-    }
-    let name = canonical.as_str();
-    // Safe desktop launching and native process discovery are both required.
-    // Without a process table we can neither find an existing window nor wait for it.
-    // Without safe desktop launching we cannot guarantee clean execution.
-    crate::platform::require(
-        crate::platform::capabilities().safe_desktop_launch,
-        "desktop launch",
-    )?;
-    crate::platform::require(
-        crate::platform::capabilities().native_process_discovery,
-        "desktop launch",
-    )?;
-
-    // 1. Check if a Codex Dock repair is currently active; refuse launch to prevent conflicting writes
-    let repair_lock_path = p.base.join(".dock-repair.lock");
-    if repair_lock_path.is_file() {
-        if let Ok(file) = crate::platform::fs::open_private(&repair_lock_path) {
-            if file.try_lock().is_err() {
-                return Err(Error::Msg(
-                    "cannot launch desktop: Codex Dock repair is currently in progress".to_string(),
-                ));
-            }
-            let _ = file.unlock();
-        }
-    }
-
-    let proc_root = crate::platform::process::proc_root().expect("probe capability just checked");
-    let launch_lock_path = p.profiles.join(name).join(".desktop-launch.lock");
-    let _launch_guard = crate::platform::fs::LockGuard::try_acquire(
-        &launch_lock_path,
-        &format!("profile '{name}' launch"),
-    )?;
-
-    if let Some(existing) = scan_running_for(p, &proc_root)?
-        .into_iter()
-        .find(|w| w.account == name)
-    {
-        if focus_pid(existing.pid) {
-            return Ok(existing);
-        }
-        return Err(Error::Msg(format!(
-            "Codex for '{name}' is running (pid {}) but its window could not be restored. Quit that Codex process, then open the account again.",
-            existing.pid
-        )));
-    }
-    crate::store::sync_projects(p, name)?;
-    let l = command_for(p, name);
-    let mut cmd = std::process::Command::new(&l.bin);
-    cmd.args(&l.args);
-    for (k, v) in &l.env {
-        cmd.env(k, v);
-    }
-    cmd.stdin(std::process::Stdio::null());
-    // The account desktop must outlive a CLI launcher and must not be a
-    // background job of that launcher's terminal.
-    detach_from_controlling_terminal(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::Msg(format!("Codex Desktop not found at {}. Put it on PATH or set CODEX_DESKTOP_BIN to its executable path.", l.bin))
-        } else {
-            Error::Io(e)
-        }
-    })?;
-    // A successful spawn is not proof that a window opened. Keep the launch
-    // lock through startup and verify a real window, including forwarded
-    // launches where the short-lived launcher exits successfully.
-    let result = (|| {
-        for _ in 0..100 {
-            if let Some(window) = scan_running_for(p, &proc_root)?
-                .into_iter()
-                .find(|w| w.account == name)
-            {
-                if focus_pid(window.pid) {
-                    return Ok(window);
-                }
-            }
-            if let Some(status) = child.try_wait()? {
-                if !status.success() {
-                    return Err(Error::Msg(format!(
-                        "Codex for '{name}' exited before opening a window ({status})"
-                    )));
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        Err(Error::Msg(format!(
-        "Codex started for '{name}', but no window could be shown. Check whether Codex Desktop is running in the background."
-    )))
-    })();
-    // Reap the desktop when it eventually exits without tying its lifetime
-    // to the short-lived CLI launch request.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    result
+    crate::platform::launch::launch_desktop(p, name)
 }
 
 /// Fail-closed native process discovery scanning the given `proc_root`.
@@ -268,6 +171,7 @@ pub fn scan_running(proc_root: &Path) -> Result<Vec<WindowProc>> {
             pid,
             account,
             user_data_dir,
+            launcher_pid: None,
         });
     }
     out.sort_by_key(|a| a.pid);
@@ -350,6 +254,7 @@ pub fn scan_running_native(p: &Paths) -> Result<Vec<WindowProc>> {
                 pid: proc.pid,
                 account,
                 user_data_dir,
+                launcher_pid: None,
             }
         })
         .collect())
@@ -366,6 +271,7 @@ pub fn running_native(p: &Paths) -> Vec<WindowProc> {
 /// stops it with SIGTTIN before the GPU process can start. A new session has
 /// no controlling terminal, so the window is neither stopped nor killed when
 /// the launcher exits.
+#[allow(dead_code)]
 fn detach_from_controlling_terminal(cmd: &mut std::process::Command) {
     #[cfg(unix)]
     {
@@ -544,7 +450,7 @@ fn focus_x11_pid(pid: u32) -> bool {
     })
 }
 
-fn focus_pid(pid: u32) -> bool {
+pub(crate) fn focus_pid(pid: u32) -> bool {
     // KWin's native window runner restores minimized windows and switches to
     // their virtual desktop. Only report success for a verified window PID.
     if focus_kwin_with(pid, |args| {

@@ -280,7 +280,7 @@ fn main() {
         Some("launch") => match args.get(1) {
             Some(name) => match windows::launch(&p, name) {
                 Ok(w) => {
-                    println!("opened window (pid {})", w.pid);
+                    println!("opened window ({})", running_line(&w));
                     0
                 }
                 Err(e) => {
@@ -367,6 +367,7 @@ mod tests {
             pid: 42,
             account: "private-account-label".into(),
             user_data_dir: PathBuf::from("/home/private-user/.config/Codex-private-account-label"),
+            launcher_pid: None,
         };
         let line = running_line(&window);
         assert!(line.contains("42"));

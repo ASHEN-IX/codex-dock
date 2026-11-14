@@ -22,6 +22,7 @@
 //! differences are.
 
 pub mod fs;
+pub mod launch;
 pub mod process;
 
 use crate::error::{Error, Result};
@@ -93,7 +94,7 @@ pub fn capabilities() -> Capabilities {
                 "window activation targets KWin/wmctrl; macOS support is not implemented yet",
             ),
             safe_desktop_launch: Support::No(
-                "desktop launching requires verified macOS application bundle execution; not implemented yet",
+                "desktop launching requires verified official macOS application bundle execution; runtime verification pending",
             ),
         }
     }
@@ -111,7 +112,7 @@ pub fn capabilities() -> Capabilities {
                 "window activation is not implemented for Windows yet",
             ),
             safe_desktop_launch: Support::No(
-                "desktop launching requires verified Windows process execution and argument escaping; not implemented yet",
+                "desktop launching requires verified official Windows process execution; runtime verification pending",
             ),
         }
     }

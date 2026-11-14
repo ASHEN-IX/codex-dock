@@ -412,13 +412,10 @@ fn unicode_string_buffer_parsing_handles_contract_and_memory_safety() {
     let parsed_padded = parse_unicode_string_buffer(&padded_buf);
     assert_eq!(parsed_padded, Some("app --flag".to_string()));
 
-    // 3. Valid buffer with relative offset:
+    // 3. Rejection of synthetic relative offset (only valid absolute pointers into caller's buffer accepted):
     let mut rel_buf = buf.clone();
     write_ptr(&mut rel_buf, header_size);
-    assert_eq!(
-        parse_unicode_string_buffer(&rel_buf),
-        Some("app --flag".to_string())
-    );
+    assert_eq!(parse_unicode_string_buffer(&rel_buf), None);
 
     // 4. Null pointer rejection:
     let mut null_ptr_buf = buf.clone();

@@ -125,14 +125,10 @@ pub fn parse_unicode_string_buffer(buf: &[u8]) -> Option<String> {
     }
 
     let base_addr = buf.as_ptr() as usize;
-    let offset = if ptr_val >= base_addr {
-        ptr_val.checked_sub(base_addr)?
-    } else if ptr_val >= header_size && ptr_val <= buf.len() {
-        // Fallback for relative offsets (e.g. synthetic test fixtures)
-        ptr_val
-    } else {
+    if ptr_val < base_addr {
         return None;
-    };
+    }
+    let offset = ptr_val.checked_sub(base_addr)?;
 
     if offset < header_size || (offset & 1) != 0 {
         return None;
@@ -670,8 +666,8 @@ pub fn scan_processes(p: &Paths) -> Result<ProcessDiscoveryReport> {
     }
 }
 
-/// Query Codex process status for a specific managed account.
-pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
+/// Query Codex process status for a specific managed profile.
+pub fn query_profile(p: &Paths, profile_name: &str) -> DiscoveryOutcome {
     if !supported() {
         return DiscoveryOutcome::Unsupported(
             "native process discovery is not supported on this platform".to_string(),
@@ -683,9 +679,9 @@ pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
         Err(e) => return DiscoveryOutcome::InspectionIncompleteOrDenied(e.to_string()),
     };
 
-    // First check if a process confidently belongs to this account:
+    // First check if a process confidently belongs to this profile:
     for proc in &report.processes {
-        if proc.attribution == ProfileAttribution::Known(account_name.to_string()) {
+        if proc.attribution == ProfileAttribution::Known(profile_name.to_string()) {
             return DiscoveryOutcome::ManagedProfile(proc.clone());
         }
     }
@@ -707,6 +703,58 @@ pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
     }
 
     DiscoveryOutcome::NoCodexProcess
+}
+
+/// Backward-compatibility alias for [`query_profile`].
+pub fn query_account(p: &Paths, account_name: &str) -> DiscoveryOutcome {
+    query_profile(p, account_name)
+}
+
+/// Check whether a process with the given PID is currently alive in the OS process table.
+#[cfg(unix)]
+pub fn is_process_alive(pid: u32) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe {
+        let ret = kill(pid as i32, 0);
+        if ret == 0 {
+            true
+        } else {
+            let err = std::io::Error::last_os_error();
+            // EPERM (errno 1) means the process exists, but caller lacks permission to signal it
+            err.raw_os_error() == Some(1)
+        }
+    }
+}
+
+/// Check whether a process with the given PID is currently alive in the OS process table.
+#[cfg(windows)]
+pub fn is_process_alive(pid: u32) -> bool {
+    extern "system" {
+        fn OpenProcess(desired_access: u32, inherit: i32, process_id: u32)
+            -> *mut std::ffi::c_void;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        fn GetExitCodeProcess(handle: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let res = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        res != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+/// Check whether a process with the given PID is currently alive in the OS process table.
+#[cfg(not(any(unix, windows)))]
+pub fn is_process_alive(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(target_os = "linux")]

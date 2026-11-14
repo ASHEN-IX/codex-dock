@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Gates are compile/test level only. Passing here launches nothing and
+        # Gates use disposable synthetic processes only. Passing here
         # claims no runtime support; runtime claims need manual evidence, and
         # docs/roadmap/cross-platform.md tracks what is still blocked.
         os: [ubuntu-24.04, macos-latest, windows-latest]
@@ -34,8 +34,10 @@ jobs:
         uses: ./.github/actions/setup-linux
       - name: Formatting
         run: cargo fmt --all -- --check
-      - name: Test the core without real credentials
-        run: cargo test --locked -p codex-dock-core
+      - name: Test the workspace without real credentials
+        run: cargo test --locked --workspace
+      - name: Test production release capability enforcement
+        run: cargo test --locked --release -p codex-dock-core --test production_launch_test
       - name: Lint the complete workspace
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Native compilation: core library, headless CLI, and Tauri shell behind

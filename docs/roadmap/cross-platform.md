@@ -57,7 +57,7 @@ Every platform-sensitive operation in the tree, and where it lives now:
   | `shared_store_compatibility` | Yes (validated on Linux) | No (unvalidated runtime; profiles stay isolated) | No (unvalidated runtime; profiles stay isolated) |
   | `native_process_discovery` | Yes (procfs `/proc`) | Yes (native `libproc` & `sysctl`; synthetic verified, real desktop unverified) | Yes (Win32 Toolhelp32 & `QueryFullProcessImageNameW`; synthetic verified, real desktop unverified) |
   | `window_activation` | Yes (KWin/wmctrl) | No (not implemented yet) | No (not implemented yet) |
-  | `safe_desktop_launch` | Yes (verified desktop exec) | No (macOS app bundle launch not implemented yet) | No (Windows process launch & escaping not implemented yet) |
+  | `safe_desktop_launch` | Yes (verified desktop exec) | No (official application bundle runtime validation pending) | No (official desktop runtime validation pending) |
 
 - `require(support, feature)` turns `No` into a user-readable refusal. Refusing
   call sites:
@@ -270,8 +270,9 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
 
 #### 7. Phase T2 Implementation Recommendations
 
-- **T2.1 (macOS Process Discovery & Window Focus):** Implement native process scanning using `libproc` or `sysctl(KERN_PROC)` to inspect process command line arguments (`--user-data-dir=`). Implement window activation via Cocoa / AppleScript.
-- **T2.2 (Windows Process Discovery & Window Focus):** Implement Win32 process enumeration and read remote command lines via `NtQueryInformationProcess` (`ProcessCommandLineInformation`). Implement window activation via `EnumWindows` and `SetForegroundWindow`.
+- **T2.1 (Native Process Discovery):** Implement native process scanning on Windows (Toolhelp32 snapshots, `NtQueryInformationProcess`) and macOS (`libproc`, `sysctl`). [Completed]
+- **T2.2 (Safe Native Desktop Launching):** Implement platform-neutral desktop launch interface with native Windows/macOS adapters, strict argument and environment isolation, lifecycle locks, and deduplication. [Completed - Conditional GO]
+- **T2.3 (Native Window Activation):** Implement window activation via Cocoa / AppleScript on macOS and Win32 `SetForegroundWindow` on Windows.
 - **Maintain Invariants:** Keep Windows and macOS in isolation-only mode throughout Phase T2. Ensure all 6 isolation invariants remain strictly enforced.
 
 ### T2 — Native process enumeration where it is worth it
@@ -291,8 +292,38 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
   - Capability `native_process_discovery` enabled (`Support::Yes`) on Linux, macOS, and Windows.
   - Verification Scope: CI tests verify synthetic helper processes and native OS discovery mechanics; proprietary official Codex Desktop runtime behavior remains unverified on Windows/macOS. Profile removal, desktop launching, and shared store remain safely gated and disabled until independently verified.
 
-#### T2.2 (Future milestone) — Native Window Activation & Desktop Launch Deduplication
-Pending window activation (Cocoa / Win32) and verified safe launch deduplication.
+#### T2.2 — Safe Native Desktop Launching (Windows & macOS)
+**Status:** Completed launch architecture, process handoff, safe startup timeout, and native execution adapters with synthetic verification; CONDITIONAL GO pending real official Codex Desktop validation.
+- **Platform-Neutral Launch Architecture (`core/src/platform/launch.rs`):**
+  - Unified launch interface (`launch_desktop`, `launch_desktop_with_options`, `resolve_desktop_binary`).
+  - Preconditions and containment: canonical account name validation, safe path segment enforcement (`accounts::safe_segment`), and profile directory containment verification (ensuring profiles cannot escape the managed profiles root via symlinks while preserving legitimate Linux `default` aliases).
+  - Lifecycle lock protection: holds the repair lock throughout startup (`.dock-repair.lock`, refusing launch if locked or inaccessible, never treating open errors as absence) and acquires profile-specific launch locks (`.desktop-launch.lock`) to prevent concurrent race conditions.
+  - Process pre-flight gating: calls `query_profile` and verifies `.desktop-launch.pid` before spawning to refuse duplicate launches (`ManagedProfile`), ambiguous unmanaged processes (`UnknownProfile`), incomplete scans (`InspectionIncompleteOrDenied`), or in-flight starting instances.
+  - CLI vs Desktop distinction: prevents accidental execution of the standalone Codex CLI as Codex Desktop (`is_codex_cli` check and CLI binary comparison).
+  - Process detachment and execution:
+    - Linux: `std::process::Command` with `pre_exec` `setsid()` session leader detachment.
+    - macOS: Direct Mach-O executable resolution inside `.app` application bundles (reading `CFBundleExecutable` from `Info.plist`), bypassing `open -a` to guarantee 100% environment (`CODEX_HOME`) and argument (`--user-data-dir`) fidelity without Launch Services sanitization.
+    - Windows: `std::process::Command` with `CREATE_NEW_PROCESS_GROUP`, Win32 argument escaping, and isolated environment propagation.
+  - Post-spawn attribution verification loop with process handoff support:
+    - Always reports the PID of the verified discovered desktop process, never an exited launcher.
+    - Preserves the initial launcher PID separately in `WindowProc.launcher_pid` when a handoff occurs.
+    - Reaps the initial spawned child asynchronously to prevent zombie accumulation.
+  - Safe startup timeout and lifecycle safety:
+    - Distinguishes confirmed spawn failures (no child created) from indeterminate verification. Even a nonzero launcher exit can leave delayed descendants, so it is not proof of absence.
+    - Detects invisible-but-running background processes when window activation is required.
+    - Preserves processes where ownership is uncertain rather than killing unrelated instances.
+    - Writes a private persistent `indeterminate` startup record before spawn; read/write errors fail closed. Only successful verification replaces it with a desktop PID. Retries refuse an uncertain record even after the launcher exits. After manually confirming that no desktop or delayed descendants remain, remove the profile’s `.desktop-launch.pid` to recover; no process is automatically killed. A verified PID record is cleared automatically only after that PID is no longer alive.
+- **Synthetic Native Verification:**
+  - Automated integration tests (`core/tests/desktop_launch_test.rs`) verify multi-profile launching (`alpha` and `beta`) with independent `CODEX_HOME` and `--user-data-dir` propagation.
+  - Verified launcher handoff, exited launcher PID exclusion, slow startup indeterminate handling, crash retry refusal and explicit recovery, delayed handoff after zero/nonzero launcher exit, duplicate launch prevention, early exit cleanup, launch lock release, and CLI binary rejection.
+- **Production Capability Gate & Verification Scope:**
+  - `LaunchOptions` API enforces platform capabilities in production release builds; ordinary callers cannot bypass `safe_desktop_launch: Support::No`. The synthetic constructor exists only in debug/test builds or with the explicit non-default `synthetic-tests` Cargo feature for isolated release tests. Environment variables cannot enable it in an ordinary release binary. Native CI separately tests normal release entry points with default features.
+  - `safe_desktop_launch` capability remains set to `Support::No` on Windows and macOS in production capabilities until official proprietary Codex Desktop runtime execution is verified on native hardware.
+  - `shared_store_compatibility` remains disabled (`Support::No`); profiles remain strictly isolated.
+  - Profile removal on Windows and macOS remains disabled until end-to-end lifecycle safety is established.
+
+#### T2.3 (Future milestone) — Native Window Activation (Windows & macOS)
+Pending window activation (Cocoa / Win32 `SetForegroundWindow` / `EnumWindows`).
 
 ### T3 — Linking enablement per OS (shared store)
 Windows only if symlink privilege is validated (Developer Mode test); macOS
