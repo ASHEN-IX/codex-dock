@@ -458,6 +458,16 @@ mod tests {
         );
     }
     #[test]
+    fn foreground_handle_without_visible_window_is_not_success() {
+        let mut hidden = window(1, 42);
+        hidden.visible = false;
+        let mut w = windows(vec![hidden]);
+        w.foreground = Some(1);
+        w.acknowledge_only = true;
+        assert!(activate_with("alpha", &mut processes(vec![report()]), &mut w).is_err());
+    }
+
+    #[test]
     fn process_termination_before_action_does_not_activate() {
         let mut gone = report();
         gone.processes.remove(0);

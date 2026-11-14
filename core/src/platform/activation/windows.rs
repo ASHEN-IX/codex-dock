@@ -19,6 +19,11 @@ extern "system" {
     fn GetClassNameW(hwnd: Hwnd, buffer: *mut u16, count: i32) -> i32;
     fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
 }
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmGetWindowAttribute(hwnd: Hwnd, attribute: u32, value: *mut c_void, size: u32) -> i32;
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn SetLastError(code: u32);
@@ -65,6 +70,12 @@ fn inspect(hwnd: Hwnd) -> Result<NativeWindow> {
         let style = window_style(hwnd, -16)?; // GWL_STYLE
         let extended = window_style(hwnd, -20)?; // GWL_EXSTYLE
         let owned = !GetWindow(hwnd, 4).is_null(); // GW_OWNER
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(hwnd, 14, &mut cloaked as *mut u32 as *mut c_void, 4) != 0 {
+            return Err(refusal(
+                "window compositor visibility could not be inspected",
+            ));
+        }
         let kind = if owned || class == "#32770" {
             WindowKind::Dialog
         } else if style & 0x4000_0000 != 0 // WS_CHILD
@@ -81,7 +92,7 @@ fn inspect(hwnd: Hwnd) -> Result<NativeWindow> {
             id: hwnd as usize as u64,
             pid,
             kind,
-            visible: IsWindowVisible(hwnd) != 0,
+            visible: IsWindowVisible(hwnd) != 0 && cloaked == 0,
             minimized: IsIconic(hwnd) != 0,
             enabled: IsWindowEnabled(hwnd) != 0,
         })
