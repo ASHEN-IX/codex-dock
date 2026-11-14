@@ -7,10 +7,10 @@ use crate::platform::process::{is_process_alive, query_profile, DiscoveryOutcome
 use crate::windows::WindowProc;
 use std::path::{Path, PathBuf};
 
-/// Launch configuration options allowing test overrides and capability enforcement settings.
+/// Launch configuration. Production callers always enforce platform capabilities.
 #[derive(Debug, Clone)]
 pub struct LaunchOptions {
-    /// Optional binary path override (only honored in isolated synthetic tests).
+    /// Optional desktop executable path. This never bypasses platform capabilities.
     pub binary_override: Option<PathBuf>,
     /// Whether to require a GUI window activation confirmation if window_activation capability is supported.
     /// In production on Linux this is true; in headless synthetic tests this can be false.
@@ -35,6 +35,7 @@ impl Default for LaunchOptions {
 
 impl LaunchOptions {
     /// Construct launch options configured for an isolated synthetic test.
+    #[cfg(any(test, debug_assertions, feature = "synthetic-tests"))]
     pub fn synthetic_test(bin: Option<PathBuf>) -> Self {
         Self {
             binary_override: bin,
@@ -203,6 +204,18 @@ pub fn launch_desktop_with_options(
     if !accounts::safe_segment(name) {
         return Err(Error::Msg(format!("invalid account name '{name}'")));
     }
+    // The historical default alias may point to the base home. Other aliases
+    // must remain inside the managed root, even before account canonicalization.
+    if name == "default" {
+        let target = std::fs::canonicalize(p.profiles.join(name))?;
+        let base = std::fs::canonicalize(&p.base)?;
+        let profiles = std::fs::canonicalize(&p.profiles)?;
+        if target != base && (!target.starts_with(&profiles) || target == profiles) {
+            return Err(Error::Msg(
+                "account 'default' escapes managed profiles root".into(),
+            ));
+        }
+    }
     let canonical = accounts::canonical_name(p, name)?;
     let name = canonical.as_str();
 
@@ -251,8 +264,7 @@ pub fn launch_desktop_with_options(
 
     // Capability enforcement: ordinary release callers CANNOT bypass safe_desktop_launch
     if options.is_synthetic_test() {
-        let is_test_env = cfg!(any(test, debug_assertions))
-            || std::env::var_os("CODEX_DOCK_SYNTHETIC_TEST").is_some();
+        let is_test_env = cfg!(any(test, debug_assertions, feature = "synthetic-tests"));
         if !is_test_env {
             return Err(Error::Msg(
                 "synthetic test mode cannot be used to bypass platform capabilities in production release builds".to_string(),
@@ -272,20 +284,11 @@ pub fn launch_desktop_with_options(
     // 1. Check if a Codex Dock repair is currently active; refuse launch to prevent conflicting writes.
     // Errors opening the repair lock file must NEVER be silently treated as absence.
     let repair_lock_path = p.base.join(".dock-repair.lock");
-    if repair_lock_path.exists() {
-        let file = crate::platform::fs::open_private(&repair_lock_path).map_err(|e| {
-            Error::Msg(format!(
-                "cannot verify repair lock '{}': {e}",
-                repair_lock_path.display()
-            ))
-        })?;
-        if file.try_lock().is_err() {
-            return Err(Error::Msg(
-                "cannot launch desktop: Codex Dock repair is currently in progress".to_string(),
-            ));
-        }
-        let _ = file.unlock();
-    }
+    // Hold this lock throughout startup; checking then unlocking races a new repair.
+    let _repair_guard = crate::platform::fs::LockGuard::try_acquire(
+        &repair_lock_path,
+        "cannot launch desktop: Codex Dock repair",
+    )?;
 
     // 2. Acquire profile launch lock
     let launch_lock_path = profile_dir.join(".desktop-launch.lock");
@@ -351,17 +354,21 @@ pub fn launch_desktop_with_options(
     }
 
     let pid_file = profile_dir.join(".desktop-launch.pid");
-    if pid_file.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&pid_file) {
-            if let Ok(recorded_pid) = content.trim().parse::<u32>() {
-                if is_process_alive(recorded_pid) {
-                    return Err(Error::Msg(format!(
-                        "a previously launched Codex process (pid {recorded_pid}) is still running or starting for account '{name}'; refusing duplicate launch"
-                    )));
-                }
+    match std::fs::read_to_string(&pid_file) {
+        Ok(content) => {
+            // Only a verified desktop record may be cleared automatically. An exited
+            // launcher can still have descendants that have not become discoverable.
+            let recorded_pid = content.trim().parse::<u32>().ok();
+            if recorded_pid.is_none_or(is_process_alive) {
+                return Err(Error::Msg(format!(
+                    "previous desktop startup for account '{name}' is still running or starting, or indeterminate; refusing duplicate launch. Inspect processes before removing '{}'",
+                    pid_file.display()
+                )));
             }
+            std::fs::remove_file(&pid_file)?;
         }
-        let _ = std::fs::remove_file(&pid_file);
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(Error::Io(e)),
     }
 
     // 4. Resolve desktop executable and reject CLI
@@ -386,143 +393,95 @@ pub fn launch_desktop_with_options(
 
     detach_from_controlling_terminal(&mut cmd);
 
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::Msg(format!(
-                "Codex Desktop not found at {}. Put it on PATH or set CODEX_DESKTOP_BIN to its executable path.",
-                bin.display()
-            ))
-        } else {
-            Error::Io(e)
+    // Persist uncertainty BEFORE spawning. Failure to publish this record must
+    // prevent launch, including crashes between spawn and verification.
+    use std::io::Write;
+    let mut record = crate::platform::fs::create_new_private(&pid_file)?;
+    record.write_all(b"indeterminate\n")?;
+    record.sync_all()?;
+    drop(record);
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            // No child was created: this is a confirmed launch failure.
+            std::fs::remove_file(&pid_file)?;
+            return Err(Error::Io(e));
         }
-    })?;
-
+    };
     let launcher_pid = child.id();
-    let _ = std::fs::write(&pid_file, launcher_pid.to_string());
+    let mut child = OwnedChild(Some(child));
 
-    // 8. Startup verification loop: wait for process discovery to attribute the process
+    // An exit (even nonzero) cannot prove that a launcher left no descendants.
+    // Keep polling after either exit status and retain uncertainty on timeout.
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(options.startup_timeout_ms);
-    let mut verified_proc: Option<WindowProc> = None;
-    let mut child_exited: Option<std::process::ExitStatus> = None;
-
-    while start.elapsed() < timeout {
+    let mut child_exited = None;
+    let mut discovered_pid = None;
+    let result = loop {
         if child_exited.is_none() {
-            if let Some(status) = child.try_wait()? {
-                child_exited = Some(status);
-                if !status.success() {
-                    // Check if discovery already attributed a running process despite launcher non-zero exit:
-                    if let DiscoveryOutcome::ManagedProfile(proc) = query_profile(p, name) {
-                        let wp = WindowProc {
-                            pid: proc.pid,
-                            account: name.to_string(),
-                            user_data_dir: proc
-                                .user_data_dir
-                                .unwrap_or_else(|| p.user_data_dir(name)),
-                            launcher_pid: (proc.pid != launcher_pid).then_some(launcher_pid),
-                        };
-                        let _ = std::fs::write(&pid_file, proc.pid.to_string());
-                        verified_proc = Some(wp);
-                        break;
-                    } else {
-                        let _ = std::fs::remove_file(&pid_file);
-                        return Err(Error::Msg(format!(
-                            "Codex for '{name}' exited before opening a window ({status})"
-                        )));
-                    }
-                }
-                // status.success(): clean handoff initiated; keep polling discovery
-            }
+            child_exited = child.0.as_mut().expect("owned child").try_wait()?;
         }
-
         if let DiscoveryOutcome::ManagedProfile(proc) = query_profile(p, name) {
-            if crate::platform::capabilities().window_activation == crate::platform::Support::Yes
-                && options.require_window_activation
-            {
-                #[cfg(target_os = "linux")]
+            if proc.pid == launcher_pid && child_exited.is_none() {
+                child_exited = child.0.as_mut().expect("owned child").try_wait()?;
+            }
+            // Exclude a reaped launcher and processes that vanished during scan.
+            if !(proc.pid == launcher_pid && child_exited.is_some()) && is_process_alive(proc.pid) {
+                discovered_pid = Some(proc.pid);
+                #[allow(unused_mut)]
+                let mut activated = true;
+                if options.require_window_activation
+                    && crate::platform::capabilities().window_activation
+                        == crate::platform::Support::Yes
                 {
-                    if crate::windows::focus_pid(proc.pid) {
-                        let wp = WindowProc {
-                            pid: proc.pid,
-                            account: name.to_string(),
-                            user_data_dir: proc
-                                .user_data_dir
-                                .unwrap_or_else(|| p.user_data_dir(name)),
-                            launcher_pid: (proc.pid != launcher_pid).then_some(launcher_pid),
-                        };
-                        let _ = std::fs::write(&pid_file, proc.pid.to_string());
-                        verified_proc = Some(wp);
-                        break;
+                    #[cfg(target_os = "linux")]
+                    {
+                        activated = crate::windows::focus_pid(proc.pid);
                     }
                 }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let wp = WindowProc {
+                if activated {
+                    // Writing a verified PID must succeed before reporting success.
+                    std::fs::write(&pid_file, proc.pid.to_string())?;
+                    break Ok(WindowProc {
                         pid: proc.pid,
                         account: name.to_string(),
                         user_data_dir: proc.user_data_dir.unwrap_or_else(|| p.user_data_dir(name)),
                         launcher_pid: (proc.pid != launcher_pid).then_some(launcher_pid),
-                    };
-                    let _ = std::fs::write(&pid_file, proc.pid.to_string());
-                    verified_proc = Some(wp);
-                    break;
+                    });
                 }
-            } else {
-                let wp = WindowProc {
-                    pid: proc.pid,
-                    account: name.to_string(),
-                    user_data_dir: proc.user_data_dir.unwrap_or_else(|| p.user_data_dir(name)),
-                    launcher_pid: (proc.pid != launcher_pid).then_some(launcher_pid),
-                };
-                let _ = std::fs::write(&pid_file, proc.pid.to_string());
-                verified_proc = Some(wp);
-                break;
             }
+        }
+        if start.elapsed() >= timeout {
+            let detail = match (discovered_pid, child_exited) {
+                (Some(pid), _) => format!("process {pid} remains running in background; no window could be shown"),
+                (_, Some(status)) => format!("launcher exited before opening a window ({status}); delayed handoff cannot be excluded"),
+                _ => format!("spawned process {launcher_pid} is still running"),
+            };
+            break Err(Error::Msg(format!(
+                "Codex startup for '{name}' is indeterminate after {}ms: {detail}. Retry is blocked until startup is verified or processes are inspected and '{}' is removed",
+                options.startup_timeout_ms, pid_file.display()
+            )));
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    let result = match verified_proc {
-        Some(w) => Ok(w),
-        None => {
-            if let Some(status) = child_exited {
-                let _ = std::fs::remove_file(&pid_file);
-                if !status.success() {
-                    Err(Error::Msg(format!(
-                        "Codex for '{name}' exited before opening a window ({status})"
-                    )))
-                } else {
-                    Err(Error::Msg(format!(
-                        "Codex launcher for '{name}' (pid {launcher_pid}) completed handoff, but no desktop process was discovered within {}ms",
-                        options.startup_timeout_ms
-                    )))
-                }
-            } else {
-                // Child process is still running in background!
-                if let DiscoveryOutcome::ManagedProfile(proc) = query_profile(p, name) {
-                    let _ = std::fs::write(&pid_file, proc.pid.to_string());
-                    Err(Error::Msg(format!(
-                        "Codex started for '{name}' (pid {}), but no window could be shown within {}ms. Process remains running in background.",
-                        proc.pid,
-                        options.startup_timeout_ms
-                    )))
-                } else {
-                    Err(Error::Msg(format!(
-                        "Codex startup for '{name}' is indeterminate: spawned process (pid {launcher_pid}) is still running, but verification timed out after {}ms",
-                        options.startup_timeout_ms
-                    )))
-                }
-            }
-        }
     };
 
     // 9. Release launch lock guard before exiting function
     drop(launch_guard);
 
-    // 10. Spawn detached reaper thread to reap child when it eventually exits
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-
     result
+}
+
+/// Reap on every exit path, including verification and record-write errors.
+/// Dropping a Child alone neither waits nor terminates it. Never kill a process
+/// merely because attribution or activation failed.
+struct OwnedChild(Option<std::process::Child>);
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
 }

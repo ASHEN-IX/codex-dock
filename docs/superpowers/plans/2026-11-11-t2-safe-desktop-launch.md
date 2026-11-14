@@ -99,7 +99,7 @@
     - Return `WindowProc`.
     - Spawn thread to reap child on eventual exit.
 - [ ] **Step 4: Connect `core/src/windows.rs` to `platform::launch`**
-  - Forward `windows::launch(p, name)` through `platform::launch::launch_account(p, name)`.
+  - Forward `windows::launch(p, name)` through `platform::launch::launch_desktop(p, name)`.
   - Maintain Linux backward compatibility.
 - [ ] **Step 5: Run tests, clippy, and formatting**
   - Run: `cargo fmt --all -- --check`

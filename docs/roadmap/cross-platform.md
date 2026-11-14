@@ -57,7 +57,7 @@ Every platform-sensitive operation in the tree, and where it lives now:
   | `shared_store_compatibility` | Yes (validated on Linux) | No (unvalidated runtime; profiles stay isolated) | No (unvalidated runtime; profiles stay isolated) |
   | `native_process_discovery` | Yes (procfs `/proc`) | Yes (native `libproc` & `sysctl`; synthetic verified, real desktop unverified) | Yes (Win32 Toolhelp32 & `QueryFullProcessImageNameW`; synthetic verified, real desktop unverified) |
   | `window_activation` | Yes (KWin/wmctrl) | No (not implemented yet) | No (not implemented yet) |
-  | `safe_desktop_launch` | Yes (verified desktop exec) | No (macOS app bundle launch not implemented yet) | No (Windows process launch & escaping not implemented yet) |
+  | `safe_desktop_launch` | Yes (verified desktop exec) | No (official application bundle runtime validation pending) | No (official desktop runtime validation pending) |
 
 - `require(support, feature)` turns `No` into a user-readable refusal. Refusing
   call sites:
@@ -297,7 +297,7 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
 - **Platform-Neutral Launch Architecture (`core/src/platform/launch.rs`):**
   - Unified launch interface (`launch_desktop`, `launch_desktop_with_options`, `resolve_desktop_binary`).
   - Preconditions and containment: canonical account name validation, safe path segment enforcement (`accounts::safe_segment`), and profile directory containment verification (ensuring profiles cannot escape the managed profiles root via symlinks while preserving legitimate Linux `default` aliases).
-  - Lifecycle lock protection: checks active repair lock (`.dock-repair.lock`, refusing launch if corrupt or locked, never treating open errors as absence) and acquires profile-specific launch locks (`.desktop-launch.lock`) to prevent concurrent race conditions.
+  - Lifecycle lock protection: holds the repair lock throughout startup (`.dock-repair.lock`, refusing launch if locked or inaccessible, never treating open errors as absence) and acquires profile-specific launch locks (`.desktop-launch.lock`) to prevent concurrent race conditions.
   - Process pre-flight gating: calls `query_profile` and verifies `.desktop-launch.pid` before spawning to refuse duplicate launches (`ManagedProfile`), ambiguous unmanaged processes (`UnknownProfile`), incomplete scans (`InspectionIncompleteOrDenied`), or in-flight starting instances.
   - CLI vs Desktop distinction: prevents accidental execution of the standalone Codex CLI as Codex Desktop (`is_codex_cli` check and CLI binary comparison).
   - Process detachment and execution:
@@ -309,15 +309,15 @@ Added `codex-dock-cli doctor` (or `audit`) to core and CLI:
     - Preserves the initial launcher PID separately in `WindowProc.launcher_pid` when a handoff occurs.
     - Reaps the initial spawned child asynchronously to prevent zombie accumulation.
   - Safe startup timeout and lifecycle safety:
-    - Distinguishes confirmed exit failures from indeterminate slow startup.
+    - Distinguishes confirmed spawn failures (no child created) from indeterminate verification. Even a nonzero launcher exit can leave delayed descendants, so it is not proof of absence.
     - Detects invisible-but-running background processes when window activation is required.
     - Preserves processes where ownership is uncertain rather than killing unrelated instances.
-    - Re-attempts and retries safely refuse duplicate launches if a process is still alive.
+    - Writes a private persistent `indeterminate` startup record before spawn; read/write errors fail closed. Only successful verification replaces it with a desktop PID. Retries refuse an uncertain record even after the launcher exits. After manually confirming that no desktop or delayed descendants remain, remove the profile’s `.desktop-launch.pid` to recover; no process is automatically killed. A verified PID record is cleared automatically only after that PID is no longer alive.
 - **Synthetic Native Verification:**
   - Automated integration tests (`core/tests/desktop_launch_test.rs`) verify multi-profile launching (`alpha` and `beta`) with independent `CODEX_HOME` and `--user-data-dir` propagation.
-  - Verified launcher handoff, exited launcher PID exclusion, slow startup indeterminate handling, crash retry recovery, duplicate launch prevention, early exit cleanup, launch lock release, and CLI binary rejection.
+  - Verified launcher handoff, exited launcher PID exclusion, slow startup indeterminate handling, crash retry refusal and explicit recovery, delayed handoff after zero/nonzero launcher exit, duplicate launch prevention, early exit cleanup, launch lock release, and CLI binary rejection.
 - **Production Capability Gate & Verification Scope:**
-  - `LaunchOptions` API enforces platform capabilities in production release builds; ordinary callers cannot bypass `safe_desktop_launch: Support::No`. Synthetic test mode is explicitly gated.
+  - `LaunchOptions` API enforces platform capabilities in production release builds; ordinary callers cannot bypass `safe_desktop_launch: Support::No`. The synthetic constructor exists only in debug/test builds or with the explicit non-default `synthetic-tests` Cargo feature for isolated release tests. Environment variables cannot enable it in an ordinary release binary. Native CI separately tests normal release entry points with default features.
   - `safe_desktop_launch` capability remains set to `Support::No` on Windows and macOS in production capabilities until official proprietary Codex Desktop runtime execution is verified on native hardware.
   - `shared_store_compatibility` remains disabled (`Support::No`); profiles remain strictly isolated.
   - Profile removal on Windows and macOS remains disabled until end-to-end lifecycle safety is established.

@@ -57,6 +57,35 @@ fn main() {
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    if args.iter().any(|a| a == "--deferred-handoff") {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let forwarded: Vec<String> = args
+            .iter()
+            .skip(1)
+            .filter(|a| a.as_str() != "--deferred-handoff")
+            .cloned()
+            .collect();
+        spawn_detached_mock(&forwarded);
+        return;
+    }
+    let mode = std::env::var_os("CODEX_HOME")
+        .and_then(|home| {
+            std::fs::read_to_string(std::path::PathBuf::from(home).join(".mock-mode")).ok()
+        })
+        .unwrap_or_default();
+    if !args.iter().any(|a| a == "--mock-child") && mode.starts_with("delayed-handoff") {
+        #[allow(clippy::zombie_processes)] // Launcher deliberately exits before this child.
+        let _child = std::process::Command::new(&exe)
+            .arg("--deferred-handoff")
+            .args(args.iter().skip(1))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn deferred handoff");
+        std::process::exit(if mode.contains("nonzero") { 1 } else { 0 });
+    }
+
     if exe_name.contains("fail") || args.iter().any(|a| a == "--exit-failure") {
         std::process::exit(1);
     }
