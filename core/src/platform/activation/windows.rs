@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Win32 top-level windows, scoped to a verified PID. No input-queue attachment,
 //! synthetic keystrokes, foreground-lock changes, or process-name focusing.
 use super::*;

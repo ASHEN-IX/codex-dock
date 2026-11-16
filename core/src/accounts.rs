@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use std::path::{Path, PathBuf};

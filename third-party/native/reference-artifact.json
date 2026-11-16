@@ -1,0 +1,7 @@
+{
+  "artifact": "Codex Dock_0.1.0_amd64.AppImage",
+  "sha256": "c40c167035bea4e002369f1fd45cecba37616c5fdc7c9ff6c6a7562509c83e7b",
+  "source_commit": "105cd40b1bed4364bf423a6d9bd40a118ef2457a",
+  "ci_run": "https://github.com/ASHEN-IX/codex-dock/actions/runs/43908206759",
+  "review_status": "Reference inventory only; exact native identity, source and helper clearance remains open"
+}

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Names coming from the outside (UI input, CLI arguments) must never be able
 //! to step outside the profile or config directories. These checks hold on
 //! every platform, so they are deliberately not gated on a target OS.

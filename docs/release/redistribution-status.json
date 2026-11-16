@@ -1,0 +1,9 @@
+{
+  "project_license": "Apache-2.0",
+  "maintainer_rights_confirmation": "2026-11-16: contributions and artwork confirmed in task",
+  "unresolved": [
+    "Verify exact native AppImage component/source versions and preserve all applicable notices, including runtime and bundler helpers",
+    "Provide a durable corresponding-source and build-script mechanism for native copyleft and MPL components before public distribution",
+    "Human trademark/name/artwork review against applicable OpenAI brand terms"
+  ]
+}

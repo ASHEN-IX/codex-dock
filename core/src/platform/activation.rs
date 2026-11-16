@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! PID-scoped window activation. Native adapters never launch a process.
 //! Production capability gates remain independent of synthetic test success.
 use crate::error::{Error, Result};

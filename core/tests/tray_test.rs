@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use codex_dock_core::tray;
 use codex_dock_core::usage::{Color, Usage};
 

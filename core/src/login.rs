@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Reading the device-code banner `codex login --device-auth` prints.
 //!
 //! The CLI colours its output with ANSI escapes, so every match has to happen

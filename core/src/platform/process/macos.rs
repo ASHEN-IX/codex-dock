@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! macOS native process discovery using libproc and sysctl(KERN_PROCARGS2).
 
 use crate::accounts;

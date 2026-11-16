@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Parse inline scripts and syntax-check them without invoking the Tauri bridge."""
 from html.parser import HTMLParser
 from pathlib import Path

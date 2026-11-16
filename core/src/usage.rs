@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::paths::Paths;
 use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};

@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+// SPDX-License-Identifier: Apache-2.0
 
 use codex_dock_core::{accounts, db, store, Paths, StoreState};
 use std::path::PathBuf;

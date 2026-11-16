@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::{Error, Result};
 
 /// The app-server speaks newline-delimited JSON over stdio: one complete JSON

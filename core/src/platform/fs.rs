@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! File-system seams: home/config roots, executable checks, link creation,
 //! private-file creation and file identity.
 //!

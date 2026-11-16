@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #[allow(clippy::zombie_processes)]
 fn spawn_detached_mock(args_to_pass: &[String]) {
     let exe = std::env::current_exe().expect("current_exe");

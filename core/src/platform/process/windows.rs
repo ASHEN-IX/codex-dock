@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Windows native process discovery using Toolhelp32 snapshot, QueryFullProcessImageNameW,
 //! NtQueryInformationProcess(ProcessCommandLineInformation), and CommandLineToArgvW.
 

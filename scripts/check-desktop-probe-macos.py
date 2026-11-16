@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Exercise macOS probe path handling with synthetic files only."""
 
 import importlib.util

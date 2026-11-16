@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Platform seams for everything the OS decides for us.
 //!
 //! Phase 1 rule: a feature the code cannot implement for a platform is

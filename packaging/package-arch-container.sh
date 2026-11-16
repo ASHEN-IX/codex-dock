@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build the binary Arch wrapper in a disposable, pinned tool environment.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)

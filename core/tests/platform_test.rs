@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Regression tests for the platform seams. They also pin the honest
 //! capability report: a refused feature must say why, and a feature worth its
 //! name must behave identically to the previous Linux implementation.

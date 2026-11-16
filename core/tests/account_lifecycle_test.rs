@@ -1,4 +1,5 @@
 #![cfg(unix)]
+// SPDX-License-Identifier: Apache-2.0
 
 #[cfg(target_os = "linux")]
 use codex_dock_core::StoreState;

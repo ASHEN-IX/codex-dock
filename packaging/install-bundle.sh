@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Install application files only. Never read or modify Codex profiles or chats.
 set -eu
 bundle=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -36,6 +37,8 @@ for size in 32 48 64 128 256; do
   install -m644 "$bundle/$icons/codex-dock.png" "$prefix/$icons/codex-dock.png"
 done
 install -m644 "$bundle/share/applications/codex-dock.desktop" "$prefix/share/applications/codex-dock.desktop"
+install -d "$prefix/share/licenses/codex-dock"
+cp -R "$bundle/share/licenses/codex-dock/." "$prefix/share/licenses/codex-dock/"
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$prefix/share/applications" || true
 fi

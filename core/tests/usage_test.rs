@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use codex_dock_core::usage::{self, Cache, Color, Usage};
 
 fn stub(pct: Option<f64>) -> Usage {

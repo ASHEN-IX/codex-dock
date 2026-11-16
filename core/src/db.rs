@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 use crate::error::{Error, Result};
 use std::path::Path;
 use std::process::Command;

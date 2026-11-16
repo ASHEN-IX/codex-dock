@@ -2,6 +2,7 @@
 pkgname=codex-dock
 pkgver=0.1.0
 pkgrel=1
+license=('Apache-2.0')
 pkgdesc='Multi-account usage dock for Codex Desktop'
 arch=('x86_64' 'aarch64')
 url='https://github.com/ASHEN-IX/codex-dock'
@@ -17,4 +18,5 @@ package() {
   install -m755 "$srcdir/codex-dock/bin/codex-dock-cli" "$pkgdir/usr/bin/codex-dock-cli"
   cp -r "$srcdir/codex-dock/share/applications" "$pkgdir/usr/share/"
   cp -r "$srcdir/codex-dock/share/icons" "$pkgdir/usr/share/"
+  cp -r "$srcdir/codex-dock/share/licenses" "$pkgdir/usr/share/"
 }

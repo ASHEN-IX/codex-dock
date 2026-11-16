@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Linux procfs native process discovery implementation.
 
 use crate::accounts;

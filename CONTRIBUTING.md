@@ -64,3 +64,16 @@ executing fork code with secrets or `pull_request_target` privileges.
 
 For maintainer settings, release instructions and remaining setup decisions,
 see [docs/maintaining.md](docs/maintaining.md).
+
+## Licensing contributions
+
+Submit project-authored contributions under Apache-2.0, consistent with [LICENSE](LICENSE).
+Only submit work you have the right to license. Identify imported code, artwork,
+fonts or data and preserve their original copyright/license notices; do not relabel
+them as project-owned. This policy does not transfer copyright or retroactively
+assert permission for someone else's work. Prior contribution and artwork permission
+is recorded in [the rights review](docs/release/rights-and-branding.md).
+
+Add an appropriate SPDX identifier to project-owned source without bulk reformatting.
+Run `python3 scripts/check-licenses.py` after dependency or notice changes. A green
+PR validates notice mechanics, not public redistribution clearance.

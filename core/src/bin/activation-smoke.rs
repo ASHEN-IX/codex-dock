@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Opt-in activation of an existing disposable profile; never launches Desktop.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn main() {
