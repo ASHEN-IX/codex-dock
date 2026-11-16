@@ -47,7 +47,11 @@ No dependency source modifications are introduced here.
 Unicode-3.0 texts, including their original copyright and permission notices,
 are preserved from the exact crate distributions. Dual-license alternatives,
 BSD, ISC, zlib and Apache notices are also retained; the root Apache license does
-not replace them. Check the actual generated file, not just SPDX metadata.
+not replace them. Nested legal files are included too: regex-syntax's
+`src/unicode_tables/LICENSE-UNICODE` and tracing-core's `src/spin/LICENSE`
+retain additional Unicode and MIT copyright/permission terms that crate-root
+metadata alone does not capture. Source modules such as `copying.rs` are excluded
+from legal-file discovery. Check the generated file, not just SPDX metadata.
 
 Primary references: [MPL FAQ](https://www.mozilla.org/en-US/MPL/2.0/FAQ/),
 [MPL text](https://www.mozilla.org/en-US/MPL/2.0/),

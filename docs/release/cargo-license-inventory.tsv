@@ -2,7 +2,7 @@ package	version	declared-license	linux-scope	source-url	notice-files
 adler2	2.0.1	0BSD OR MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/adler2/adler2-2.0.1.crate	LICENSE-0BSD, LICENSE-APACHE, LICENSE-MIT
 aho-corasick	1.1.5	Unlicense OR MIT	binary-candidate	https://static.crates.io/crates/aho-corasick/aho-corasick-1.1.5.crate	COPYING, LICENSE-MIT
 alloc-no-stdlib	3.0.0	BSD-3-Clause	binary-candidate	https://static.crates.io/crates/alloc-no-stdlib/alloc-no-stdlib-3.0.0.crate	LICENSE
-alloc-stdlib	0.3.0	BSD-3-Clause	binary-candidate	https://static.crates.io/crates/alloc-stdlib/alloc-stdlib-0.3.0.crate	alloc-stdlib-0.3.0.BSD-3-Clause.txt
+alloc-stdlib	0.3.0	BSD-3-Clause	binary-candidate	https://static.crates.io/crates/alloc-stdlib/alloc-stdlib-0.3.0.crate	third-party/licenses/alloc-stdlib-0.3.0.BSD-3-Clause.txt
 android_system_properties	0.1.6	MIT OR Apache-2.0	excluded-non-linux	https://static.crates.io/crates/android_system_properties/android_system_properties-0.1.6.crate	LICENSE-APACHE, LICENSE-MIT
 anyhow	1.0.104	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/anyhow/anyhow-1.0.104.crate	LICENSE-APACHE, LICENSE-MIT
 async-broadcast	0.7.2	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/async-broadcast/async-broadcast-0.7.2.crate	LICENSE-APACHE, LICENSE-MIT
@@ -78,8 +78,8 @@ dirs	7.0.0	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/di
 dirs-sys	0.5.0	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/dirs-sys/dirs-sys-0.5.0.crate	LICENSE-APACHE, LICENSE-MIT
 dispatch2	0.3.1	Zlib OR Apache-2.0 OR MIT	excluded-non-linux	https://static.crates.io/crates/dispatch2/dispatch2-0.3.1.crate	not distributed on Linux
 displaydoc	0.2.7	MIT OR Apache-2.0	build-or-proc-macro	https://static.crates.io/crates/displaydoc/displaydoc-0.2.7.crate	LICENSE-APACHE, LICENSE-MIT
-dlopen2	0.8.2	MIT	binary-candidate	https://static.crates.io/crates/dlopen2/dlopen2-0.8.2.crate	dlopen2.MIT.txt
-dlopen2_derive	0.4.3	MIT	build-or-proc-macro	https://static.crates.io/crates/dlopen2_derive/dlopen2_derive-0.4.3.crate	dlopen2.MIT.txt
+dlopen2	0.8.2	MIT	binary-candidate	https://static.crates.io/crates/dlopen2/dlopen2-0.8.2.crate	third-party/licenses/dlopen2.MIT.txt
+dlopen2_derive	0.4.3	MIT	build-or-proc-macro	https://static.crates.io/crates/dlopen2_derive/dlopen2_derive-0.4.3.crate	third-party/licenses/dlopen2.MIT.txt
 dom_query	0.28.0	MIT	binary-candidate	https://static.crates.io/crates/dom_query/dom_query-0.28.0.crate	LICENSE
 dpi	0.1.2	Apache-2.0 AND MIT	binary-candidate	https://static.crates.io/crates/dpi/dpi-0.1.2.crate	LICENSE, LICENSE-LIBM-MIT
 dtoa	1.0.11	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/dtoa/dtoa-1.0.11.crate	LICENSE-APACHE, LICENSE-MIT
@@ -184,9 +184,9 @@ json-patch	4.2.0	MIT/Apache-2.0	binary-candidate	https://static.crates.io/crates
 jsonptr	0.7.1	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/jsonptr/jsonptr-0.7.1.crate	LICENSE-APACHE, LICENSE-MIT
 keyboard-types	0.8.3	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/keyboard-types/keyboard-types-0.8.3.crate	LICENSE-APACHE, LICENSE-MIT
 libappindicator	0.9.0	Apache-2.0 OR MIT	binary-candidate	https://static.crates.io/crates/libappindicator/libappindicator-0.9.0.crate	LICENSE-APACHE, LICENSE-MIT
-libappindicator-sys	0.9.0	Apache-2.0 OR MIT	binary-candidate	https://static.crates.io/crates/libappindicator-sys/libappindicator-sys-0.9.0.crate	libappindicator-sys-0.9.0.MIT.txt, libappindicator-sys-0.9.0.Apache-2.0.txt
+libappindicator-sys	0.9.0	Apache-2.0 OR MIT	binary-candidate	https://static.crates.io/crates/libappindicator-sys/libappindicator-sys-0.9.0.crate	third-party/licenses/libappindicator-sys-0.9.0.MIT.txt, third-party/licenses/libappindicator-sys-0.9.0.Apache-2.0.txt
 libc	0.2.191	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/libc/libc-0.2.191.crate	LICENSE-APACHE, LICENSE-MIT
-libdbus-sys	0.2.7	Apache-2.0/MIT	binary-candidate	https://static.crates.io/crates/libdbus-sys/libdbus-sys-0.2.7.crate	LICENSE-APACHE, LICENSE-MIT
+libdbus-sys	0.2.7	Apache-2.0/MIT	binary-candidate	https://static.crates.io/crates/libdbus-sys/libdbus-sys-0.2.7.crate	LICENSE-APACHE, LICENSE-MIT, vendor/dbus/COPYING, vendor/dbus/cmake/modules/COPYING-CMAKE-SCRIPTS
 libloading	0.7.4	ISC	binary-candidate	https://static.crates.io/crates/libloading/libloading-0.7.4.crate	LICENSE
 libredox	0.1.25	MIT	excluded-non-linux	https://static.crates.io/crates/libredox/libredox-0.1.25.crate	LICENSE
 linux-raw-sys	0.12.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	binary-candidate	https://static.crates.io/crates/linux-raw-sys/linux-raw-sys-0.12.1.crate	COPYRIGHT, LICENSE-APACHE, LICENSE-Apache-2.0_WITH_LLVM-exception, LICENSE-MIT
@@ -270,7 +270,7 @@ ref-cast	1.0.27	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crat
 ref-cast-impl	1.0.27	MIT OR Apache-2.0	build-or-proc-macro	https://static.crates.io/crates/ref-cast-impl/ref-cast-impl-1.0.27.crate	LICENSE-APACHE, LICENSE-MIT
 regex	1.13.1	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/regex/regex-1.13.1.crate	LICENSE-APACHE, LICENSE-MIT
 regex-automata	0.4.18	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/regex-automata/regex-automata-0.4.18.crate	LICENSE-APACHE, LICENSE-MIT
-regex-syntax	0.8.11	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/regex-syntax/regex-syntax-0.8.11.crate	LICENSE-APACHE, LICENSE-MIT
+regex-syntax	0.8.11	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/regex-syntax/regex-syntax-0.8.11.crate	LICENSE-APACHE, LICENSE-MIT, src/unicode_tables/LICENSE-UNICODE
 reqwest	0.13.5	MIT OR Apache-2.0	excluded-non-linux	https://static.crates.io/crates/reqwest/reqwest-0.13.5.crate	LICENSE-APACHE, LICENSE-MIT
 rustc-hash	2.1.3	Apache-2.0 OR MIT	binary-candidate	https://static.crates.io/crates/rustc-hash/rustc-hash-2.1.3.crate	LICENSE-APACHE, LICENSE-MIT
 rustc_version	0.4.1	MIT OR Apache-2.0	build-or-proc-macro	https://static.crates.io/crates/rustc_version/rustc_version-0.4.1.crate	LICENSE-APACHE, LICENSE-MIT
@@ -282,7 +282,7 @@ schemars	0.9.0	MIT	binary-candidate	https://static.crates.io/crates/schemars/sch
 schemars	1.2.3	MIT	binary-candidate	https://static.crates.io/crates/schemars/schemars-1.2.3.crate	LICENSE
 schemars_derive	0.8.22	MIT	build-or-proc-macro	https://static.crates.io/crates/schemars_derive/schemars_derive-0.8.22.crate	LICENSE
 scopeguard	1.2.0	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/scopeguard/scopeguard-1.2.0.crate	LICENSE-APACHE, LICENSE-MIT
-selectors	0.38.0	MPL-2.0	binary-candidate	https://static.crates.io/crates/selectors/selectors-0.38.0.crate	selectors-0.38.0.MPL-2.0.txt
+selectors	0.38.0	MPL-2.0	binary-candidate	https://static.crates.io/crates/selectors/selectors-0.38.0.crate	third-party/licenses/selectors-0.38.0.MPL-2.0.txt
 semver	1.0.28	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/semver/semver-1.0.28.crate	LICENSE-APACHE, LICENSE-MIT
 serde	1.0.229	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/serde/serde-1.0.229.crate	LICENSE-APACHE, LICENSE-MIT
 serde-untagged	0.1.9	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/serde-untagged/serde-untagged-0.1.9.crate	LICENSE-APACHE, LICENSE-MIT
@@ -361,7 +361,7 @@ tower-layer	0.3.3	MIT	excluded-non-linux	https://static.crates.io/crates/tower-l
 tower-service	0.3.3	MIT	excluded-non-linux	https://static.crates.io/crates/tower-service/tower-service-0.3.3.crate	LICENSE
 tracing	0.1.44	MIT	binary-candidate	https://static.crates.io/crates/tracing/tracing-0.1.44.crate	LICENSE
 tracing-attributes	0.1.31	MIT	build-or-proc-macro	https://static.crates.io/crates/tracing-attributes/tracing-attributes-0.1.31.crate	LICENSE
-tracing-core	0.1.36	MIT	binary-candidate	https://static.crates.io/crates/tracing-core/tracing-core-0.1.36.crate	LICENSE
+tracing-core	0.1.36	MIT	binary-candidate	https://static.crates.io/crates/tracing-core/tracing-core-0.1.36.crate	LICENSE, src/spin/LICENSE
 tray-icon	0.25.1	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/tray-icon/tray-icon-0.25.1.crate	LICENSE-APACHE, LICENSE-MIT, LICENSE.spdx
 try-lock	0.2.5	MIT	excluded-non-linux	https://static.crates.io/crates/try-lock/try-lock-0.2.5.crate	LICENSE
 typeid	1.0.3	MIT OR Apache-2.0	binary-candidate	https://static.crates.io/crates/typeid/typeid-1.0.3.crate	LICENSE-APACHE, LICENSE-MIT

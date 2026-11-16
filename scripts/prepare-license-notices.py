@@ -15,6 +15,20 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def notice_files(root):
+    prefixes = ('license', 'licence', 'notice', 'copying', 'copyright')
+    return sorted(path for path in root.rglob('*') if path.is_file()
+                  and path.name.lower().startswith(prefixes)
+                  and path.suffix.lower() not in ('.rs', '.c', '.h', '.json'))
+
+
+def notice_label(path, package_root):
+    try:
+        return str(path.relative_to(package_root))
+    except ValueError:
+        return str(path.relative_to(ROOT))
+
+
 def read_notice(path):
     # Universal-newline conversion would alter some upstream license files.
     with path.open(encoding='utf-8', newline='') as stream:
@@ -55,8 +69,7 @@ def generate(metadata, linux, output):
         key = f'{name}@{version}'
         scope = 'binary-candidate' if package['id'] in runtime else 'build-or-proc-macro' if package['id'] in nodes else 'excluded-non-linux'
         root = Path(package['manifest_path']).parent
-        notices = sorted(p for p in root.iterdir() if p.is_file() and
-                         p.name.lower().startswith(('license', 'licence', 'notice', 'copying', 'copyright')))
+        notices = notice_files(root)
         if not notices:
             original_missing.append({'package': key, 'scope': scope,
                 'repository': package.get('repository'),
@@ -72,7 +85,7 @@ def generate(metadata, linux, output):
                 provenance.append(item['source'])
         url = f'https://static.crates.io/crates/{name}/{name}-{version}.crate'
         rows.append('\t'.join([name, version, package['license'] or 'UNDECLARED', scope, url,
-                               ', '.join(p.name for p in notices) or 'not distributed on Linux']))
+                               ', '.join(notice_label(p, root) for p in notices) or 'not distributed on Linux']))
         if scope == 'excluded-non-linux':
             continue
         texts.append(f'\n=== {name} {version} | {package["license"]} | {scope} ===\nSource: {url}\n')
@@ -82,7 +95,7 @@ def generate(metadata, linux, output):
             missing.append(key)
             texts.append('UNRESOLVED NOTICE TEXT: redistribution review required.\n')
         for notice in notices:
-            texts.append(f'\n--- {notice.name} ---\n' + read_notice(notice) + '\n')
+            texts.append(f'\n--- {notice_label(notice, root)} ---\n' + read_notice(notice) + '\n')
     output.mkdir(parents=True, exist_ok=True)
     (output / 'cargo-license-inventory.tsv').write_text('\n'.join(rows) + '\n')
     write_notice(output / 'THIRD-PARTY-NOTICES.txt', ''.join(texts))

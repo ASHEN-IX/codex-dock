@@ -31,6 +31,15 @@ class NoticeRegressionTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_nested_notices_are_collected_but_source_modules_are_not(self):
+        root = self.root / 'crate'
+        (root / 'src/vendor').mkdir(parents=True)
+        (root / 'LICENSE').write_text('top-level terms')
+        (root / 'src/vendor/LICENSE').write_text('nested terms')
+        (root / 'src/copying.rs').write_text('source module, not a legal notice')
+        self.assertEqual([str(p.relative_to(root)) for p in notice_generator.notice_files(root)],
+                         ['LICENSE', 'src/vendor/LICENSE'])
+
     def test_upstream_crlf_notice_bytes_are_preserved(self):
         source = self.root / 'upstream-license'
         target = self.root / 'retained-license'
