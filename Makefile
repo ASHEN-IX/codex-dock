@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Codex Dock
 #
 #   make test      core crate test suite (works offline, no toolchain fetch)
@@ -20,6 +21,7 @@ check-core:
 	$(CARGO) fmt --all -- --check
 	$(CARGO) test --locked -p codex-dock-core
 	python3 scripts/check-ui.py
+	python3 scripts/check-licenses.py
 
 check: check-core
 	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
@@ -65,6 +67,9 @@ install:
 	  install -m644 src-tauri/icons/$${s}x$${s}.png \
 	    $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/$(BIN).png; \
 	done
+	install -d $(PREFIX)/share/licenses/codex-dock
+	install -m644 LICENSE NOTICE THIRD-PARTY-NOTICES.md THIRD-PARTY-NOTICES.txt $(PREFIX)/share/licenses/codex-dock/
+	cp -R third-party/native $(PREFIX)/share/licenses/codex-dock/
 	install -d $(PREFIX)/share/applications
 	install -m644 packaging/codex-dock.desktop $(DESKTOP)
 	@command -v update-desktop-database >/dev/null && \
@@ -81,6 +86,7 @@ autostart:
 uninstall:
 	rm -f $(PREFIX)/bin/$(BIN) $(PREFIX)/bin/codex-dock-cli $(DESKTOP) $(AUTOSTART)
 	rm -f $(PREFIX)/share/icons/hicolor/*/apps/$(BIN).png
+	rm -rf $(PREFIX)/share/licenses/codex-dock
 	@echo "removed"
 
 clean:

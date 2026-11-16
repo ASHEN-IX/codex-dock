@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Regression cases for missing, altered and executable redistribution notices."""
+import importlib.util
+from pathlib import Path
+import shutil
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location('native_notices', ROOT / 'scripts/check-native-package-notices.py')
+checks = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checks)
+license_spec = importlib.util.spec_from_file_location('license_checks', ROOT / 'scripts/check-licenses.py')
+license_checks = importlib.util.module_from_spec(license_spec)
+license_spec.loader.exec_module(license_checks)
+
+
+class NoticeRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='dock-notice-regression-')
+        self.root = Path(self.temp.name)
+        self.base = self.root / 'usr/share/licenses/codex-dock'
+        for name, source in checks.expected_notices().items():
+            target = self.base / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_complete_payload_passes(self):
+        checks.check_tree(self.root)
+
+    def test_missing_attribution_is_rejected(self):
+        (self.base / 'NOTICE').unlink()
+        with self.assertRaisesRegex(ValueError, 'Missing/altered notice'):
+            checks.check_tree(self.root)
+
+    def test_modified_dependency_notice_is_rejected(self):
+        with (self.base / 'THIRD-PARTY-NOTICES.txt').open('ab') as target:
+            target.write(b'\naltered\n')
+        with self.assertRaisesRegex(ValueError, 'Missing/altered notice'):
+            checks.check_tree(self.root)
+
+    def test_executable_license_data_is_rejected(self):
+        (self.base / 'LICENSE').chmod(0o755)
+        with self.assertRaisesRegex(ValueError, 'Executable license data'):
+            checks.check_tree(self.root)
+
+    def test_open_obligations_block_release(self):
+        with self.assertRaisesRegex(ValueError, 'Public redistribution remains blocked'):
+            license_checks.require_release_clearance({'unresolved': ['synthetic-source-obligation']})
+
+    def test_resolved_obligations_pass_the_clearance_check(self):
+        license_checks.require_release_clearance({'unresolved': []})
+
+
+
+if __name__ == '__main__':
+    unittest.main()

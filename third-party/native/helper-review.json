@@ -1,0 +1,16 @@
+{
+  "AppRun.wrapped": {
+    "sha256": "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f",
+    "upstream_mirror": "https://github.com/tauri-apps/binary-releases/releases/tag/apprun-old",
+    "upstream_description": "Mirror of AppImage/AppImageKit continuous; exact source/build provenance still unresolved",
+    "status": "BLOCKED pending exact license/notice/source verification"
+  },
+  "outer_runtime": {
+    "bytes_before_squashfs": 944632,
+    "sha256": "c3f9559c8e2e7a08599a687109757ff459c545929bf802a0809aca7468c23c71",
+    "status": "BLOCKED pending exact runtime source, license, build/patch provenance and source delivery"
+  },
+  "linuxdeploy_hooks_and_data": {
+    "status": "Human review required; Cargo/dpkg library metadata does not cover all scripts/data"
+  }
+}

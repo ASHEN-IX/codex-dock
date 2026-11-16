@@ -5,10 +5,11 @@ apply GitHub settings; a contribution cannot change the upstream owner's setting
 
 ## Required decisions
 
-- Choose and add a license, including the appropriate copyright information.
-  No license file is currently present in upstream. This contribution does not
-  assign a license to existing code. Resolve this before calling the repository
-  a licensed open-source distribution or publishing a general release.
+- Apache-2.0 is selected and project permission/artwork authorization is recorded
+  in [release/rights-and-branding.md](release/rights-and-branding.md). Review the
+  remaining native corresponding-source, exact identity/helper and trademark
+  obligations in [release/licensing.md](release/licensing.md) before distribution.
+  Do not equate license-file presence or passing engineering checks with clearance.
 - Confirm who maintains the project and how to contact them privately. Consider
   adding `CODEOWNERS` when the maintainers have agreed to receive review requests.
 - Enable private vulnerability reporting and give maintainers access to reports.
@@ -64,7 +65,7 @@ workspace lockfile to build against.
 
 ## Make a release
 
-1. Resolve the license and third-party notice blockers in
+1. Resolve the outstanding redistribution and brand-review blockers in
    [release/licensing.md](release/licensing.md). Update both Cargo package versions,
    `src-tauri/tauri.conf.json`, and Arch `pkgver` (hyphens are removed), then
    regenerate the root lockfile with Cargo. Run CI and review security results.

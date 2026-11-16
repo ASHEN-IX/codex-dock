@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Capability honesty checks that compile on every target OS. The runtime
 //! content differs per platform, but the shape of the guarantee does not: a
 //! capability that is absent must be reported as `No(reason)`, and callers

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Stub process discovery for untested platforms.
 
 use super::ProcessDiscoveryReport;

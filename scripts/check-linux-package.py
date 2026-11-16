@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Inspect the portable archive and test file-only installation in a disposable HOME.
 
 This never launches Dock, Codex, a browser, or a login. It is not GUI evidence.
@@ -23,6 +24,12 @@ def verify(archive):
         *(f'share/icons/hicolor/{size}x{size}/apps/codex-dock.png'
           for size in (32, 48, 64, 128, 256)),
     }
+    project_root = Path(__file__).resolve().parent.parent
+    notice_sources = {f'share/licenses/codex-dock/{name}': project_root / name
+                      for name in ('LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md', 'THIRD-PARTY-NOTICES.txt')}
+    notice_sources.update({f'share/licenses/codex-dock/native/{p.relative_to(project_root / "third-party/native")}': p
+                          for p in (project_root / 'third-party/native').rglob('*') if p.is_file()})
+    expected.update(notice_sources)
     allowed_dirs = {str(parent) for name in expected for parent in Path('codex-dock', name).parents}
     checksum = archive.with_name(archive.name + '.sha256').read_text().split()
     assert checksum == [digest(archive), archive.name], 'Archive checksum mismatch'
@@ -48,6 +55,8 @@ def verify(archive):
             assert files == expected, f'Unexpected package contents: {files ^ expected}'
             # Only regular files and directories with validated relative paths remain.
             bundle.extractall(root)
+        for name, source in notice_sources.items():
+            assert digest(root / 'codex-dock' / name) == digest(source), f'Altered notice: {name}'
         home = root / 'home'
         home.mkdir()
         prefix = home / '.local'
@@ -69,6 +78,8 @@ def verify(archive):
         invalid = subprocess.run(['sh', str(installer), 'relative'], env=env, capture_output=True)
         assert invalid.returncode != 0 and b'absolute path' in invalid.stderr
         subprocess.run(['sh', str(installer)], env=env, check=True)
+        for name, source in notice_sources.items():
+            assert digest(prefix / name) == digest(source), f'Missing installed notice: {name}'
         original = {name: digest(prefix / 'bin' / name) for name in ('codex-dock', 'codex-dock-cli')}
         assert not list((prefix / 'share/codex-dock').glob('previous-*'))
         # A distinct older executable pair makes backup/rollback verification meaningful.
@@ -88,6 +99,7 @@ def verify(archive):
         (prefix / 'share/applications/codex-dock.desktop').unlink()
         for size in (32, 48, 64, 128, 256):
             (prefix / f'share/icons/hicolor/{size}x{size}/apps/codex-dock.png').unlink()
+        shutil.rmtree(prefix / 'share/licenses/codex-dock')
         for path, checksum, mode in before:
             assert digest(path) == checksum and path.stat().st_mode == mode
         assert link.is_symlink() and os.readlink(link) == '../../.codex/state_5.sqlite'

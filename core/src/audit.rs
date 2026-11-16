@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Platform runtime audit, executable discovery, and profile isolation validation.
 //!
 //! Provides safe, opt-in diagnostics that:

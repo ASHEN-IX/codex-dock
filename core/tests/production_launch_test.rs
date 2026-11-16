@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Runs with default features in both debug and release builds.
 #[test]
 fn ordinary_options_enforce_production_capabilities() {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Platform safety regression tests for Phase 1.1:
 //! - Account creation atomicity and transactional rollback.
 //! - Pre-existing directory preservation.

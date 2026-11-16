@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Validate versioned release input without executing code or creating tags."""
 import json
 from pathlib import Path

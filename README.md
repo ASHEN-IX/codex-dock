@@ -1,5 +1,8 @@
 # Codex Dock
 
+An independent community project, not affiliated with, sponsored by, or endorsed
+by OpenAI. Product names identify interoperability; no trademark rights are granted.
+
 Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md),
 [security reporting](SECURITY.md), and the [community conduct](CODE_OF_CONDUCT.md).
 CI tests and builds the Linux app without using real account credentials.
@@ -220,3 +223,11 @@ features; cross-OS guarantees are pinned in CI on all three runners").
 
 Codex Desktop is a closed Electron binary, so its chat UI cannot be embedded
 here. Codex Dock launches it and shares its store; it does not render chats.
+
+## License and redistribution
+
+Project-authored code is licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE),
+[third-party notices](THIRD-PARTY-NOTICES.md), and the
+[rights/branding review](docs/release/rights-and-branding.md). Third-party terms
+remain in force. Licensing implementation does not authorize a public release;
+native source/notice obligations and brand review remain open.

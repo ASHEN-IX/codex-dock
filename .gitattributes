@@ -1,3 +1,6 @@
-* text=auto eol=lf
-*.png binary
-*.ico binary
+# SPDX-License-Identifier: Apache-2.0
+# Preserve upstream legal text byte-for-byte, including original whitespace.
+THIRD-PARTY-NOTICES.txt -whitespace linguist-generated=true
+third-party/licenses/** -whitespace
+third-party/native/copyright/** -whitespace
+third-party/native/common-licenses/** -whitespace

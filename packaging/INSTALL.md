@@ -122,3 +122,12 @@ separately if needed. No historical-release compatibility is asserted until test
 contents, executable modes, file-only installation, a simulated older-binary
 upgrade/rollback, and removal against disposable data sentinels. It does not launch
 a desktop, authenticate, or prove compatibility with an earlier released version.
+
+## Licenses and notices
+
+Packages retain project LICENSE/NOTICE and Cargo/native notice evidence beneath
+`share/licenses/codex-dock` (under the selected portable prefix or `/usr`). Do not
+remove notices while redistributing binaries. Native AppImage source/identity and
+branding obligations remain open; notice inclusion is not release authorization.
+Portable removal may also delete only `<prefix>/share/licenses/codex-dock`.
+Profiles, authentication data, chats and executable rollback backups remain intact.

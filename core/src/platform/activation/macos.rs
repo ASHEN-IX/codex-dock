@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! AppKit activation with Accessibility window roles and AXUIElementGetPid.
 //! AX supplies both an actionable window reference and its owner, unlike a
 //! Quartz CGWindowID (which has no public, reliable mapping to an AX element).

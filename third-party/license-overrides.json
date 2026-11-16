@@ -1,0 +1,57 @@
+{
+  "alloc-stdlib@0.3.0": {
+    "files": [
+      {
+        "path": "third-party/licenses/alloc-stdlib-0.3.0.BSD-3-Clause.txt",
+        "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+        "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE"
+      }
+    ],
+    "reason": "Repository BSD notice applies to the alloc-stdlib subcrate; fetched at its .cargo_vcs_info revision."
+  },
+  "dlopen2@0.8.2": {
+    "files": [
+      {
+        "path": "third-party/licenses/dlopen2.MIT.txt",
+        "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2",
+        "source": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+      }
+    ],
+    "reason": "Workspace MIT notice at exact crate VCS revision."
+  },
+  "dlopen2_derive@0.4.3": {
+    "files": [
+      {
+        "path": "third-party/licenses/dlopen2.MIT.txt",
+        "sha256": "39fa265207450e77c62e90c5594a06c085b655d8374c7ced4bf7894b6bd95dd2",
+        "source": "https://raw.githubusercontent.com/OpenByteDev/dlopen2/cc80e4a0a90d499b677fdf7743699b4b3a43a989/LICENSE"
+      }
+    ],
+    "reason": "Same workspace/revision as dlopen2; proc-macro build dependency."
+  },
+  "libappindicator-sys@0.9.0": {
+    "files": [
+      {
+        "path": "third-party/licenses/libappindicator-sys-0.9.0.MIT.txt",
+        "sha256": "eb227437252b2a7a9c1fc342c93ade1f3d7ce38cc6dd754f613db07d53ceff0b",
+        "source": "https://static.crates.io/crates/libappindicator/libappindicator-0.9.0.crate"
+      },
+      {
+        "path": "third-party/licenses/libappindicator-sys-0.9.0.Apache-2.0.txt",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "source": "https://static.crates.io/crates/libappindicator/libappindicator-0.9.0.crate"
+      }
+    ],
+    "reason": "Parent libappindicator 0.9.0 crate has both notices and the identical VCS commit eafd1e3682a1247f595410266091e9684021cb6f; sys is its sys/ subcrate."
+  },
+  "selectors@0.38.0": {
+    "files": [
+      {
+        "path": "third-party/licenses/selectors-0.38.0.MPL-2.0.txt",
+        "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+        "source": "https://static.crates.io/crates/cssparser/cssparser-0.37.0.crate"
+      }
+    ],
+    "reason": "Crate source headers explicitly specify MPL-2.0, including lib.rs; preserve the standard MPL text from cssparser 0.37.0 and exact selectors source access. No invented copyright holder."
+  }
+}

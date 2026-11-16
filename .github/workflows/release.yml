@@ -31,8 +31,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: python3 scripts/check-release.py "$RELEASE_TAG"
-      - name: Require the owner-approved project license
-        run: test -s LICENSE
+      - name: Require license and redistribution clearance
+        run: python3 scripts/check-licenses.py --release
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal

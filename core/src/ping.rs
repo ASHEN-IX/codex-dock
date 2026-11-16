@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Explicit, one-shot usage-window pings. No schedules or automatic retries.
 use crate::{
     accounts,

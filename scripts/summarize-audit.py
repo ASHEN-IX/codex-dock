@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keep informational RustSec warnings visible even when audit exits zero."""
 import json
 from pathlib import Path

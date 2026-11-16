@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// SPDX-License-Identifier: Apache-2.0
 
 use codex_dock_core::login::{parse_device_code, strip_ansi};
 use codex_dock_core::{accounts, store, tray, usage, windows, Paths};

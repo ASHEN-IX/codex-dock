@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Native platform process discovery for Codex Desktop.
 //!
 //! Provides a platform-neutral interface to detect running Codex Desktop instances,

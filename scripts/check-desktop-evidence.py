@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Validate synthetic desktop evidence fixtures and exercise rejection cases."""
 
 from copy import deepcopy

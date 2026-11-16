@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conservative AX/Quartz bounds corroboration. Bounds never establish account
 //! ownership; that must already be proven independently from each window's PID.
 #[derive(Clone, Copy, Debug)]

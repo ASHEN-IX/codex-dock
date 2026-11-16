@@ -1,4 +1,5 @@
 #![cfg(any(debug_assertions, feature = "synthetic-tests"))]
+// SPDX-License-Identifier: Apache-2.0
 
 use codex_dock_core::paths::Paths;
 use codex_dock_core::platform::launch::{

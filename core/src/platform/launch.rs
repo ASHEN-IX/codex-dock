@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Platform-neutral Codex Desktop launch orchestration with native platform adapters.
 
 use crate::accounts;

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Read-only inventory of a tester-selected macOS application bundle."""
 
 import argparse

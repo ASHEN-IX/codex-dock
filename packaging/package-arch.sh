@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 archive="codex-dock-linux-$(uname -m).tar.gz"

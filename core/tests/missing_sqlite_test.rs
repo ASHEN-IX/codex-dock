@@ -1,4 +1,5 @@
 #![cfg(unix)]
+// SPDX-License-Identifier: Apache-2.0
 
 use codex_dock_core::{db, store, Paths};
 
