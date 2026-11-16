@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Dock T2.4A sanitized official-runtime tester report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_kind",
+    "dock_commit",
+    "test_date",
+    "host",
+    "product",
+    "distribution",
+    "execution_mode",
+    "isolation_verdict",
+    "probe_samples",
+    "scenarios"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evidence_kind": {"const": "official-runtime"},
+    "dock_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "test_date": {"type": "string", "format": "date"},
+    "host": {"enum": ["windows-x64", "windows-arm64", "macos-apple-silicon", "macos-intel"]},
+    "product": {
+      "enum": [
+        "chatgpt-desktop-with-codex",
+        "standalone-codex-desktop",
+        "chatgpt-classic",
+        "codex-cli"
+      ]
+    },
+    "distribution": {"$ref": "#/$defs/nullable_text"},
+    "execution_mode": {"enum": ["native", "emulated", "translated", "unverified"]},
+    "isolation_verdict": {"enum": ["GO", "NO-GO", "UNVERIFIED"]},
+    "probe_samples": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
+    "scenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "inventory",
+        "profile_isolation",
+        "account_focus",
+        "minimized_hidden",
+        "multiple_windows",
+        "modal",
+        "wrong_missing_unmanaged",
+        "process_churn",
+        "windows_foreground_policy",
+        "macos_accessibility",
+        "retry_no_spawn"
+      ],
+      "properties": {
+        "identity": {"$ref": "#/$defs/scenario"},
+        "inventory": {"$ref": "#/$defs/scenario"},
+        "profile_isolation": {"$ref": "#/$defs/scenario"},
+        "account_focus": {"$ref": "#/$defs/scenario"},
+        "minimized_hidden": {"$ref": "#/$defs/scenario"},
+        "multiple_windows": {"$ref": "#/$defs/scenario"},
+        "modal": {"$ref": "#/$defs/scenario"},
+        "wrong_missing_unmanaged": {"$ref": "#/$defs/scenario"},
+        "process_churn": {"$ref": "#/$defs/scenario"},
+        "windows_foreground_policy": {"$ref": "#/$defs/scenario"},
+        "macos_accessibility": {"$ref": "#/$defs/scenario"},
+        "retry_no_spawn": {"$ref": "#/$defs/scenario"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scenarios": {"properties": {"profile_isolation": {"properties": {"status": {"const": "PASS"}}}}}
+        }
+      },
+      "then": {"properties": {"isolation_verdict": {"const": "GO"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "scenarios": {"properties": {"profile_isolation": {"properties": {"status": {"const": "FAIL"}}}}}
+        }
+      },
+      "then": {"properties": {"isolation_verdict": {"const": "NO-GO"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "scenarios": {
+            "properties": {"profile_isolation": {"properties": {"status": {"const": "BLOCKED"}}}}
+          }
+        }
+      },
+      "then": {"properties": {"isolation_verdict": {"const": "UNVERIFIED"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "scenarios": {
+            "properties": {"profile_isolation": {"properties": {"status": {"const": "NOT EXECUTED"}}}}
+          }
+        }
+      },
+      "then": {"properties": {"isolation_verdict": {"const": "UNVERIFIED"}}}
+    }
+  ],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S"},
+    "nullable_text": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+    "pid": {"type": "integer", "minimum": 1},
+    "operation": {"enum": ["supported", "unsupported", "unverified"]},
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "identity", "executable_path", "profile_attribution"],
+      "properties": {
+        "pid": {"$ref": "#/$defs/pid"},
+        "identity": {"enum": ["selected-executable", "same-name-different-path", "path-unavailable"]},
+        "executable_path": {"$ref": "#/$defs/nullable_text"},
+        "profile_attribution": {"const": "unverified"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "expected", "observed", "pids", "window_ids"],
+      "properties": {
+        "method": {
+          "enum": [
+            "local-os-metadata",
+            "product-ui",
+            "official-distribution",
+            "smoke-and-os-observation"
+          ]
+        },
+        "expected": {"$ref": "#/$defs/text"},
+        "observed": {"$ref": "#/$defs/text"},
+        "pids": {"type": "array", "items": {"$ref": "#/$defs/pid"}, "uniqueItems": true},
+        "window_ids": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^(0x[0-9a-fA-F]+|[0-9]+)$"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "evidence"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "BLOCKED", "NOT EXECUTED"]},
+        "reason": {"$ref": "#/$defs/nullable_text"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "PASS"}}},
+          "then": {"properties": {"evidence": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["FAIL", "BLOCKED"]}}},
+          "then": {"properties": {"reason": {"$ref": "#/$defs/text"}}}
+        }
+      ]
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "application", "discovery", "activation_permission", "operations"],
+      "properties": {
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "build", "architecture"],
+          "properties": {
+            "name": {"enum": ["windows", "macos"]},
+            "version": {"$ref": "#/$defs/nullable_text"},
+            "build": {"$ref": "#/$defs/nullable_text"},
+            "architecture": {"$ref": "#/$defs/nullable_text"}
+          }
+        },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "executable_path",
+            "architectures",
+            "declared_name",
+            "application_id",
+            "package_lookup",
+            "package_id",
+            "publisher",
+            "signer",
+            "signature_status",
+            "version",
+            "package_or_build_version"
+          ],
+          "properties": {
+            "executable_path": {"$ref": "#/$defs/text"},
+            "architectures": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+            "declared_name": {"$ref": "#/$defs/nullable_text"},
+            "application_id": {"$ref": "#/$defs/nullable_text"},
+            "package_lookup": {"enum": ["matched-install-root", "no-match", "unavailable", "bundle-plist"]},
+            "package_id": {"$ref": "#/$defs/nullable_text"},
+            "publisher": {"$ref": "#/$defs/nullable_text"},
+            "signer": {"$ref": "#/$defs/nullable_text"},
+            "signature_status": {"$ref": "#/$defs/nullable_text"},
+            "version": {"$ref": "#/$defs/nullable_text"},
+            "package_or_build_version": {"$ref": "#/$defs/nullable_text"}
+          }
+        },
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "completeness", "unresolved_paths", "processes"],
+          "properties": {
+            "scope": {"enum": ["selected-executable-basename", "visible-pids-and-executable-paths"]},
+            "completeness": {"enum": ["complete", "partial", "unavailable"]},
+            "unresolved_paths": {"type": ["integer", "null"], "minimum": 0},
+            "processes": {"type": "array", "items": {"$ref": "#/$defs/process"}}
+          }
+        },
+        "activation_permission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "availability"],
+          "properties": {
+            "kind": {"enum": ["windows-foreground-policy", "macos-accessibility-probe-context"]},
+            "availability": {"enum": ["available", "unavailable", "unverified"]}
+          }
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "installed_metadata",
+            "process_inventory",
+            "managed_profile_attribution",
+            "separate_instances",
+            "activation_smoke",
+            "dock_production_launch",
+            "dock_production_activation"
+          ],
+          "properties": {
+            "installed_metadata": {"$ref": "#/$defs/operation"},
+            "process_inventory": {"$ref": "#/$defs/operation"},
+            "managed_profile_attribution": {"$ref": "#/$defs/operation"},
+            "separate_instances": {"$ref": "#/$defs/operation"},
+            "activation_smoke": {"$ref": "#/$defs/operation"},
+            "dock_production_launch": {"$ref": "#/$defs/operation"},
+            "dock_production_activation": {"$ref": "#/$defs/operation"}
+          }
+        }
+      }
+    }
+  }
+}
