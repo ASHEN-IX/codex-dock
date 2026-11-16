@@ -32,6 +32,7 @@
     },
     "distribution": {"$ref": "#/$defs/nullable_text"},
     "execution_mode": {"enum": ["native", "emulated", "translated", "unverified"]},
+    "execution_evidence": {"$ref": "#/$defs/execution_evidence"},
     "isolation_verdict": {"enum": ["GO", "NO-GO", "UNVERIFIED"]},
     "probe_samples": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
     "scenarios": {
@@ -69,40 +70,234 @@
   },
   "allOf": [
     {
-      "if": {
+      "if": {"$ref": "#/$defs/isolation_passed"},
+      "then": {
         "properties": {
-          "scenarios": {"properties": {"profile_isolation": {"properties": {"status": {"const": "PASS"}}}}}
+          "isolation_verdict": {"const": "GO"},
+          "product": {"enum": ["chatgpt-desktop-with-codex", "standalone-codex-desktop"]},
+          "distribution": {"$ref": "#/$defs/text"},
+          "scenarios": {
+            "properties": {
+              "identity": {
+                "properties": {
+                  "status": {"const": "PASS"},
+                  "evidence": {
+                    "allOf": [
+                      {
+                        "contains": {"properties": {"method": {"const": "official-distribution"}}}
+                      },
+                      {"contains": {"properties": {"method": {"const": "product-ui"}}}},
+                      {
+                        "contains": {
+                          "properties": {
+                            "method": {"const": "local-os-metadata"},
+                            "pids": {"minItems": 1}
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "profile_isolation": {
+                "properties": {
+                  "evidence": {
+                    "contains": {
+                      "properties": {
+                        "method": {"const": "smoke-and-os-observation"},
+                        "pids": {"minItems": 2}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
-      "then": {"properties": {"isolation_verdict": {"const": "GO"}}}
-    },
-    {
-      "if": {
+      "else": {
         "properties": {
-          "scenarios": {"properties": {"profile_isolation": {"properties": {"status": {"const": "FAIL"}}}}}
+          "scenarios": {
+            "properties": {
+              "account_focus": {"$ref": "#/$defs/scenario_not_passed"},
+              "minimized_hidden": {"$ref": "#/$defs/scenario_not_passed"},
+              "multiple_windows": {"$ref": "#/$defs/scenario_not_passed"},
+              "modal": {"$ref": "#/$defs/scenario_not_passed"},
+              "wrong_missing_unmanaged": {"$ref": "#/$defs/scenario_not_passed"},
+              "process_churn": {"$ref": "#/$defs/scenario_not_passed"},
+              "windows_foreground_policy": {"$ref": "#/$defs/scenario_not_passed"},
+              "macos_accessibility": {"$ref": "#/$defs/scenario_not_passed"},
+              "retry_no_spawn": {"$ref": "#/$defs/scenario_not_passed"}
+            }
+          }
         }
-      },
-      "then": {"properties": {"isolation_verdict": {"const": "NO-GO"}}}
+      }
     },
     {
       "if": {
         "properties": {
           "scenarios": {
-            "properties": {"profile_isolation": {"properties": {"status": {"const": "BLOCKED"}}}}
+            "properties": {"profile_isolation": {"properties": {"status": {"const": "FAIL"}}}}
           }
         }
       },
-      "then": {"properties": {"isolation_verdict": {"const": "UNVERIFIED"}}}
+      "then": {"properties": {"isolation_verdict": {"const": "NO-GO"}}},
+      "else": {
+        "if": {"not": {"$ref": "#/$defs/isolation_passed"}},
+        "then": {"properties": {"isolation_verdict": {"const": "UNVERIFIED"}}}
+      }
     },
     {
-      "if": {
+      "if": {"properties": {"execution_mode": {"const": "unverified"}}},
+      "then": {"properties": {"execution_evidence": {"type": "null"}}},
+      "else": {
+        "required": ["execution_evidence"],
+        "properties": {"execution_evidence": {"type": "object"}}
+      }
+    },
+    {
+      "if": {"properties": {"host": {"const": "windows-x64"}}},
+      "then": {
         "properties": {
-          "scenarios": {
-            "properties": {"profile_isolation": {"properties": {"status": {"const": "NOT EXECUTED"}}}}
+          "execution_mode": {"enum": ["native", "emulated", "unverified"]},
+          "execution_evidence": {
+            "properties": {
+              "method": {"const": "windows-process-machine"},
+              "process_architecture": {"enum": ["x86", "x64"]}
+            }
+          },
+          "probe_samples": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/windows_probe"},
+                {
+                  "properties": {"os": {"properties": {"architecture": {"enum": ["x64", null]}}}}
+                }
+              ]
+            }
+          }
+        },
+        "if": {"properties": {"execution_mode": {"const": "native"}}},
+        "then": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"enum": ["x64"]}}}
+          }
+        },
+        "else": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"not": {"enum": ["x64"]}}}}
           }
         }
-      },
-      "then": {"properties": {"isolation_verdict": {"const": "UNVERIFIED"}}}
+      }
+    },
+    {
+      "if": {"properties": {"host": {"const": "windows-arm64"}}},
+      "then": {
+        "properties": {
+          "execution_mode": {"enum": ["native", "emulated", "unverified"]},
+          "execution_evidence": {
+            "properties": {
+              "method": {"const": "windows-process-machine"},
+              "process_architecture": {"enum": ["x86", "x64", "arm64", "arm64ec"]}
+            }
+          },
+          "probe_samples": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/windows_probe"},
+                {
+                  "properties": {"os": {"properties": {"architecture": {"enum": ["arm64", null]}}}}
+                }
+              ]
+            }
+          }
+        },
+        "if": {"properties": {"execution_mode": {"const": "native"}}},
+        "then": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"enum": ["arm64", "arm64ec"]}}}
+          }
+        },
+        "else": {
+          "properties": {
+            "execution_evidence": {
+              "properties": {"process_architecture": {"not": {"enum": ["arm64", "arm64ec"]}}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"host": {"const": "macos-apple-silicon"}}},
+      "then": {
+        "properties": {
+          "execution_mode": {"enum": ["native", "translated", "unverified"]},
+          "execution_evidence": {
+            "properties": {
+              "method": {"const": "macos-process-kind"},
+              "process_architecture": {"enum": ["arm64", "arm64e", "x86_64", "x86_64h"]}
+            }
+          },
+          "probe_samples": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/macos_probe"},
+                {
+                  "properties": {"os": {"properties": {"architecture": {"enum": ["arm64", null]}}}}
+                }
+              ]
+            }
+          }
+        },
+        "if": {"properties": {"execution_mode": {"const": "native"}}},
+        "then": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"enum": ["arm64", "arm64e"]}}}
+          }
+        },
+        "else": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"not": {"enum": ["arm64", "arm64e"]}}}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"host": {"const": "macos-intel"}}},
+      "then": {
+        "properties": {
+          "execution_mode": {"enum": ["native", "unverified"]},
+          "execution_evidence": {
+            "properties": {
+              "method": {"const": "macos-process-kind"},
+              "process_architecture": {"enum": ["arm64", "arm64e", "x86_64", "x86_64h"]}
+            }
+          },
+          "probe_samples": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/macos_probe"},
+                {
+                  "properties": {"os": {"properties": {"architecture": {"enum": ["x86_64", null]}}}}
+                }
+              ]
+            }
+          }
+        },
+        "if": {"properties": {"execution_mode": {"const": "native"}}},
+        "then": {
+          "properties": {
+            "execution_evidence": {"properties": {"process_architecture": {"enum": ["x86_64", "x86_64h"]}}}
+          }
+        },
+        "else": {
+          "properties": {
+            "execution_evidence": {
+              "properties": {"process_architecture": {"not": {"enum": ["x86_64", "x86_64h"]}}}
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -252,6 +447,49 @@
             "dock_production_activation": {"$ref": "#/$defs/operation"}
           }
         }
+      }
+    },
+    "isolation_passed": {
+      "properties": {
+        "scenarios": {"properties": {"profile_isolation": {"properties": {"status": {"const": "PASS"}}}}}
+      }
+    },
+    "scenario_not_passed": {"not": {"properties": {"status": {"const": "PASS"}}}},
+    "windows_probe": {
+      "properties": {
+        "os": {"properties": {"name": {"const": "windows"}}},
+        "application": {
+          "properties": {
+            "architectures": {"items": {"enum": ["x86", "x64", "arm64", "arm64ec", "arm64x"]}},
+            "package_lookup": {"enum": ["matched-install-root", "no-match", "unavailable"]}
+          }
+        },
+        "discovery": {"properties": {"scope": {"const": "selected-executable-basename"}}},
+        "activation_permission": {"properties": {"kind": {"const": "windows-foreground-policy"}}}
+      }
+    },
+    "macos_probe": {
+      "properties": {
+        "os": {"properties": {"name": {"const": "macos"}}},
+        "application": {
+          "properties": {
+            "architectures": {"items": {"enum": ["arm64", "arm64e", "x86_64", "x86_64h", "i386"]}},
+            "package_lookup": {"enum": ["bundle-plist"]}
+          }
+        },
+        "discovery": {"properties": {"scope": {"const": "visible-pids-and-executable-paths"}}},
+        "activation_permission": {"properties": {"kind": {"const": "macos-accessibility-probe-context"}}}
+      }
+    },
+    "execution_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["method", "pid", "process_architecture", "observed"],
+      "properties": {
+        "method": {"enum": ["windows-process-machine", "macos-process-kind"]},
+        "pid": {"$ref": "#/$defs/pid"},
+        "process_architecture": {"$ref": "#/$defs/text"},
+        "observed": {"$ref": "#/$defs/text"}
       }
     }
   }

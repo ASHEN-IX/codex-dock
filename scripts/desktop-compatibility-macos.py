@@ -9,6 +9,7 @@ import plistlib
 import re
 import subprocess
 import sys
+from xml.parsers.expat import ExpatError
 
 
 def system_tool(*command, signing_details=False):
@@ -21,7 +22,11 @@ def system_tool(*command, signing_details=False):
 
 
 def protect_path(path):
-    return re.sub(r"^(/(?:System/Volumes/Data/)?Users/)[^/]+", r"\1<user>", str(path))
+    value = str(path)
+    if not value.startswith("/") or re.search(r"[\x00-\x1f\x7f\ud800-\udfff]", value):
+        return None
+    return re.sub(r"^(/(?:System/Volumes/Data/)?Users/)[^/]+", r"\1<user>", value,
+                  flags=re.IGNORECASE)
 
 
 def plist_text(info, key):
@@ -87,10 +92,16 @@ def inventory(executable):
         path = Path(path_buffer.value.decode("utf-8", errors="surrogateescape"))
         if path.name.casefold() != executable.name.casefold():
             continue
+        protected_path = protect_path(path)
+        if protected_path is None:
+            unresolved += 1
         result["processes"].append({
             "pid": pid,
-            "identity": "selected-executable" if path == executable else "same-name-different-path",
-            "executable_path": protect_path(path),
+            "identity": (
+                "path-unavailable" if protected_path is None else
+                "selected-executable" if path == executable else "same-name-different-path"
+            ),
+            "executable_path": protected_path,
             "profile_attribution": "unverified",
         })
     result["completeness"] = "partial" if unresolved or count >= len(pids) else "complete"
@@ -111,6 +122,28 @@ def accessibility_permission():
         return "unverified"
 
 
+def resolve_application(path):
+    if not path.is_absolute() or path.suffix.lower() != ".app" or protect_path(path) is None:
+        raise ValueError
+    bundle = path.resolve(strict=True)
+    contents = bundle / "Contents"
+    plist = (contents / "Info.plist").resolve(strict=True)
+    if not plist.is_relative_to(contents) or not plist.is_file():
+        raise ValueError
+    with plist.open("rb") as file:
+        info = plistlib.load(file)
+    if not isinstance(info, dict):
+        raise ValueError
+    name = info["CFBundleExecutable"]
+    if not isinstance(name, str) or Path(name).name != name or name in ("", ".", ".."):
+        raise ValueError
+    executable = (contents / "MacOS" / name).resolve(strict=True)
+    if (not executable.is_relative_to(contents / "MacOS") or not executable.is_file()
+            or protect_path(executable) is None):
+        raise ValueError
+    return bundle, executable, info
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--confirm-disposable", required=True, action="store_true")
@@ -119,30 +152,23 @@ def main():
     if sys.platform != "darwin":
         parser.error("this probe requires macOS")
     try:
-        if not args.bundle.is_absolute() or args.bundle.suffix.lower() != ".app":
-            raise ValueError
-        bundle = args.bundle.resolve(strict=True)
-        contents = bundle / "Contents"
-        with (contents / "Info.plist").open("rb") as file:
-            info = plistlib.load(file)
-        name = info["CFBundleExecutable"]
-        if not isinstance(name, str) or Path(name).name != name or name in ("", ".", ".."):
-            raise ValueError
-        executable = (contents / "MacOS" / name).resolve(strict=True)
-        if not executable.is_relative_to(contents / "MacOS") or not executable.is_file():
-            raise ValueError
-    except (OSError, ValueError, KeyError, TypeError, plistlib.InvalidFileException):
+        bundle, executable, info = resolve_application(args.bundle)
+    except (OSError, ValueError, KeyError, RuntimeError, ExpatError, plistlib.InvalidFileException):
         parser.error("supply an installed .app bundle with a readable main executable and plist")
 
     _, version = system_tool("/usr/bin/sw_vers", "-productVersion")
     _, build = system_tool("/usr/bin/sw_vers", "-buildVersion")
     arm_result, arm = system_tool("/usr/sbin/sysctl", "-n", "hw.optional.arm64")
-    _, machine = system_tool("/usr/bin/uname", "-m")
+    host_architecture = None
+    if arm_result == 0 and arm == "1":
+        host_architecture = "arm64"
+    elif arm_result == 0 and arm == "0":
+        host_architecture = "x86_64"
     discovery = inventory(executable)
     print(json.dumps({
         "os": {
             "name": "macos", "version": version or None, "build": build or None,
-            "architecture": "arm64" if arm_result == 0 and arm == "1" else (machine or None),
+            "architecture": host_architecture,
         },
         "application": application_metadata(bundle, executable, info),
         "discovery": discovery,

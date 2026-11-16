@@ -7,7 +7,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Protect-Path([string]$Path) {
-    if ($Path) { $Path -replace '^(.*?[\\/]Users[\\/])[^\\/]+', '$1<user>' }
+    if ($Path -match '^[A-Za-z]:[\\/][^:\x00-\x1f\x7f<>"|?*]+\z') {
+        $Path -replace '^([A-Za-z]:[\\/](?:.*?[\\/])?Users[\\/])[^\\/]+', '$1<user>'
+    }
 }
 
 function Read-ExecutableArchitecture([string]$Path) {
@@ -32,11 +34,17 @@ function Read-ExecutableArchitecture([string]$Path) {
     }
 }
 
-if (-not $ConfirmDisposable -or $Executable -notmatch '^[A-Za-z]:[\\/]') {
+if (-not $ConfirmDisposable -or -not (Protect-Path $Executable)) {
     throw 'Supply -ConfirmDisposable and an absolute executable path.'
 }
-$exe = Get-Item -LiteralPath $Executable
+try {
+    $exe = Get-Item -LiteralPath $Executable
+} catch {
+    throw 'Supply a readable installed .exe file.'
+}
 if ($exe.PSIsContainer -or $exe.Extension -ine '.exe') { throw 'Supply the installed .exe file.' }
+$protectedExecutable = Protect-Path $exe.FullName
+if (-not $protectedExecutable) { throw 'Supply the installed .exe file.' }
 
 $os = Get-CimInstance -ClassName Win32_OperatingSystem -Property Version,BuildNumber
 $processor = Get-CimInstance -ClassName Win32_Processor -Property Architecture | Select-Object -First 1
@@ -74,7 +82,8 @@ try {
     $processes = @(
         foreach ($process in ($snapshot | Where-Object { $_.Name -ieq $exe.Name } | Sort-Object ProcessId)) {
             $identity = 'same-name-different-path'
-            if (-not $process.ExecutablePath) {
+            $protectedPath = Protect-Path $process.ExecutablePath
+            if (-not $protectedPath) {
                 $unresolved++
                 $identity = 'path-unavailable'
             } elseif ($process.ExecutablePath -ieq $exe.FullName) {
@@ -83,7 +92,7 @@ try {
             [ordered]@{
                 pid = [long]$process.ProcessId
                 identity = $identity
-                executable_path = Protect-Path $process.ExecutablePath
+                executable_path = $protectedPath
                 profile_attribution = 'unverified'
             }
         }
@@ -110,7 +119,7 @@ $operations = [ordered]@{
         architecture = $hostArchitecture
     }
     application = [ordered]@{
-        executable_path = Protect-Path $exe.FullName
+        executable_path = $protectedExecutable
         architectures = @(Read-ExecutableArchitecture $exe.FullName)
         declared_name = if ($exe.VersionInfo.ProductName) { $exe.VersionInfo.ProductName } else { $null }
         application_id = $package.PackageFamilyName
