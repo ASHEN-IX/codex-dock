@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "official-runtime",
+  "dock_commit": "0000000000000000000000000000000000000000",
+  "test_date": "2026-11-16",
+  "host": "windows-x64",
+  "product": "chatgpt-desktop-with-codex",
+  "distribution": null,
+  "execution_mode": "unverified",
+  "isolation_verdict": "UNVERIFIED",
+  "probe_samples": [],
+  "scenarios": {
+    "identity": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "inventory": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "profile_isolation": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "account_focus": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "minimized_hidden": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "multiple_windows": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "modal": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "wrong_missing_unmanaged": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "process_churn": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "windows_foreground_policy": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "macos_accessibility": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "retry_no_spawn": {"status": "NOT EXECUTED", "reason": null, "evidence": []}
+  }
+}

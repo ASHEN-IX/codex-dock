@@ -26,6 +26,11 @@ jobs:
           rustup default stable
       - run: cargo fmt --all -- --check
       - run: python3 scripts/check-ui.py
+      - name: Validate desktop evidence fixtures
+        run: |
+          python3 -m venv "$RUNNER_TEMP/desktop-evidence"
+          "$RUNNER_TEMP/desktop-evidence/bin/pip" install jsonschema==4.26.0
+          "$RUNNER_TEMP/desktop-evidence/bin/python" scripts/check-desktop-evidence.py
       - name: Validate workflow syntax and expressions
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
       - name: Check release helper syntax

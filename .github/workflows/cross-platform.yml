@@ -42,6 +42,43 @@ jobs:
         run: cargo test --locked --release -p codex-dock-core --lib platform::activation
       - name: Check explicitly opt-in smoke harness
         run: cargo check --locked -p codex-dock-core --features synthetic-tests --bin activation-smoke
+      - name: Exercise Windows metadata probe on the runner shell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $image = (Get-Process -Id $PID).Path
+          $report = .\scripts\desktop-compatibility.ps1 -ConfirmDisposable -Executable $image | ConvertFrom-Json
+          if ($report.os.name -ne 'windows' -or $report.os.architecture -notin @('x64', 'arm64') -or
+              -not $report.application.architectures -or
+              $report.discovery.completeness -eq 'unavailable' -or
+              -not ($report.discovery.processes | Where-Object { $_.pid -eq $PID -and $_.identity -eq 'selected-executable' }) -or
+              $report.operations.dock_production_launch -ne 'unsupported') {
+            throw 'Unexpected Windows probe output'
+          }
+          foreach ($invalid in @('relative.exe', '\\server\private\test.exe', 'C:\missing\test.exe:private',
+                                  'C:\missing|"private".exe', "C:\missing\private.exe`n")) {
+            $failure = $null
+            try {
+              .\scripts\desktop-compatibility.ps1 -ConfirmDisposable -Executable $invalid | Out-Null
+            } catch {
+              $failure = $_.Exception.Message
+            }
+            if ($failure -ne 'Supply -ConfirmDisposable and an absolute executable path.') {
+              throw 'Malformed Windows path was not rejected with the generic diagnostic'
+            }
+          }
+      - name: Exercise macOS metadata probe on a system bundle
+        if: runner.os == 'macOS'
+        run: |
+          set -o pipefail
+          python3 scripts/check-desktop-probe-macos.py
+          python3 scripts/desktop-compatibility-macos.py --confirm-disposable /System/Library/CoreServices/Finder.app |
+            python3 -c 'import json, sys; r = json.load(sys.stdin)
+          assert r["os"]["name"] == "macos"
+          assert r["application"]["application_id"] == "com.apple.finder"
+          assert r["application"]["architectures"]
+          assert r["discovery"]["completeness"] in ("complete", "partial")
+          assert r["operations"]["dock_production_activation"] == "unsupported"'
       - name: Lint the complete workspace
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Native compilation: core library, headless CLI, and Tauri shell behind

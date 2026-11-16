@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "official-runtime",
+  "dock_commit": "0000000000000000000000000000000000000000",
+  "test_date": "2026-11-16",
+  "host": "windows-x64",
+  "product": "chatgpt-desktop-with-codex",
+  "distribution": "Official installer",
+  "execution_mode": "native",
+  "isolation_verdict": "GO",
+  "probe_samples": [
+    {
+      "os": {
+        "name": "windows",
+        "version": "10.0",
+        "build": "26100",
+        "architecture": "x64"
+      },
+      "application": {
+        "executable_path": "C:\\Users\\<user>\\TestApp.exe",
+        "architectures": [
+          "x64"
+        ],
+        "declared_name": "Test App",
+        "application_id": "Example.TestApp",
+        "package_lookup": "matched-install-root",
+        "package_id": "Example.TestApp_1.0",
+        "publisher": "Example",
+        "signer": "Example",
+        "signature_status": "Valid",
+        "version": "1.0",
+        "package_or_build_version": "1.0.0"
+      },
+      "discovery": {
+        "scope": "selected-executable-basename",
+        "completeness": "complete",
+        "unresolved_paths": 0,
+        "processes": [
+          {
+            "pid": 101,
+            "identity": "selected-executable",
+            "executable_path": "C:\\Users\\<user>\\TestApp.exe",
+            "profile_attribution": "unverified"
+          }
+        ]
+      },
+      "activation_permission": {
+        "kind": "windows-foreground-policy",
+        "availability": "unverified"
+      },
+      "operations": {
+        "installed_metadata": "supported",
+        "process_inventory": "supported",
+        "managed_profile_attribution": "unverified",
+        "separate_instances": "unverified",
+        "activation_smoke": "unverified",
+        "dock_production_launch": "unsupported",
+        "dock_production_activation": "unsupported"
+      }
+    }
+  ],
+  "scenarios": {
+    "identity": {
+      "status": "PASS",
+      "reason": null,
+      "evidence": [
+        {
+          "method": "official-distribution",
+          "expected": "Official installer",
+          "observed": "Installer verified against official distribution.",
+          "pids": [],
+          "window_ids": []
+        },
+        {
+          "method": "product-ui",
+          "expected": "Codex view present",
+          "observed": "Opened Codex view.",
+          "pids": [],
+          "window_ids": []
+        },
+        {
+          "method": "local-os-metadata",
+          "expected": "Running image matches installed executable",
+          "observed": "PID 101 matches installed package and executable.",
+          "pids": [
+            101
+          ],
+          "window_ids": []
+        }
+      ]
+    },
+    "inventory": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "profile_isolation": {
+      "status": "PASS",
+      "reason": null,
+      "evidence": [
+        {
+          "method": "smoke-and-os-observation",
+          "expected": "Two independent stores with no fallback",
+          "observed": "PID 101 used <sandbox>/alpha and PID 102 used <sandbox>/beta. The default store stayed untouched.",
+          "pids": [
+            101,
+            102
+          ],
+          "window_ids": []
+        }
+      ]
+    },
+    "account_focus": {
+      "status": "PASS",
+      "reason": null,
+      "evidence": [
+        {
+          "method": "smoke-and-os-observation",
+          "expected": "Beta window receives focus",
+          "observed": "Foreground window 0x201 belonged to beta PID 102.",
+          "pids": [
+            102
+          ],
+          "window_ids": [
+            "0x201"
+          ]
+        }
+      ]
+    },
+    "minimized_hidden": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "multiple_windows": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "modal": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "wrong_missing_unmanaged": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "process_churn": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "windows_foreground_policy": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "macos_accessibility": {"status": "NOT EXECUTED", "reason": null, "evidence": []},
+    "retry_no_spawn": {"status": "NOT EXECUTED", "reason": null, "evidence": []}
+  },
+  "execution_evidence": {
+    "method": "windows-process-machine",
+    "pid": 101,
+    "process_architecture": "x64",
+    "observed": "OS process machine query reports x64 without emulation."
+  }
+}
