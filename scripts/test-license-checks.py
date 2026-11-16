@@ -47,8 +47,8 @@ class NoticeRegressionTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'disposable application file')
         autostart = self.root / 'autostart/codex-dock.desktop'
-        subprocess.run(['make', 'uninstall', f'PREFIX={prefix}', f'AUTOSTART={autostart}'],
-                       cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['make', '-f', str(ROOT / 'Makefile'), 'uninstall', f'PREFIX={prefix}', f'AUTOSTART={autostart}'],
+                       cwd=self.root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(adjacent.read_bytes(), b'not application data')
         self.assertEqual(profile.read_bytes(), b'disposable authentication sentinel')
         self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
