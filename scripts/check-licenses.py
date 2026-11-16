@@ -47,6 +47,8 @@ def check(release=False):
         for name in ('LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md', 'THIRD-PARTY-NOTICES.txt'):
             if mapping[f'/usr/share/licenses/codex-dock/{name}'] != '../' + name:
                 raise ValueError(f'Missing {kind} notice mapping: {name}')
+    if config['bundle']['linux']['deb']['files']['/usr/share/doc/codex-dock/copyright'] != '../packaging/debian-copyright':
+        raise ValueError('Missing Debian copyright mapping')
     status = json.loads((ROOT / 'docs/release/redistribution-status.json').read_text())
     if release:
         require_release_clearance(status)

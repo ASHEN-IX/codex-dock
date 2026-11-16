@@ -53,7 +53,8 @@
           "/usr/share/licenses/codex-dock/NOTICE": "../NOTICE",
           "/usr/share/licenses/codex-dock/THIRD-PARTY-NOTICES.md": "../THIRD-PARTY-NOTICES.md",
           "/usr/share/licenses/codex-dock/THIRD-PARTY-NOTICES.txt": "../THIRD-PARTY-NOTICES.txt",
-          "/usr/share/licenses/codex-dock/native": "../third-party/native"
+          "/usr/share/licenses/codex-dock/native": "../third-party/native",
+          "/usr/share/doc/codex-dock/copyright": "../packaging/debian-copyright"
         }
       },
       "rpm": {

@@ -36,6 +36,9 @@ def check_archive(path):
             data, = root.glob('data.tar.*')
             subprocess.run(['bsdtar', '-xf', str(data), '-C', str(root)], check=True)
         check_tree(root)
+        if path.suffix == '.deb':
+            if (root / 'usr/share/doc/codex-dock/copyright').read_bytes() != (ROOT / 'packaging/debian-copyright').read_bytes():
+                raise ValueError('Missing/altered Debian copyright document')
     print(f'PASS exact notice bytes and modes: {path.name}')
 
 

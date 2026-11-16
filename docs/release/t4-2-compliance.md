@@ -49,7 +49,9 @@ freezing the branch; a Git commit cannot contain its own SHA.
   Debian, RPM, portable and Arch builds passed local notice-byte/mode checks.
   Each carries LICENSE, NOTICE, both third-party documents and retained native
   copyright evidence under share/licenses/codex-dock. Native distro paths are
-  under /usr. A source Makefile install also carries the notices.
+  under /usr; Debian additionally carries its conventional
+  /usr/share/doc/codex-dock/copyright document with full project terms and notice
+  pointers. A source Makefile install also carries the notices.
 - **PASS locally — user data preservation:** portable installation, simulated
   upgrade/rollback and removal preserve synthetic profile/auth/store data and links.
   The installer performs no profile migration or repair. Native CI installation,
