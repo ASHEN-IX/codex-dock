@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -30,6 +31,29 @@ class NoticeRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_source_uninstall_with_spaces_preserves_adjacent_and_profile_data(self):
+        prefix = self.root / 'account data'
+        adjacent = self.root / 'account'
+        adjacent.write_bytes(b'not application data')
+        profile = self.root / '.codex-profiles/test/auth.json'
+        profile.parent.mkdir(parents=True)
+        profile.write_bytes(b'disposable authentication sentinel')
+        profile.chmod(0o600)
+        for name in ('bin/codex-dock', 'bin/codex-dock-cli',
+                     'share/applications/codex-dock.desktop',
+                     'share/licenses/codex-dock/LICENSE'):
+            path = prefix / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'disposable application file')
+        autostart = self.root / 'autostart/codex-dock.desktop'
+        subprocess.run(['make', 'uninstall', f'PREFIX={prefix}', f'AUTOSTART={autostart}'],
+                       cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(adjacent.read_bytes(), b'not application data')
+        self.assertEqual(profile.read_bytes(), b'disposable authentication sentinel')
+        self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((prefix / 'bin/codex-dock').exists())
+        self.assertFalse((prefix / 'share/licenses/codex-dock').exists())
 
     def test_nested_notices_are_collected_but_source_modules_are_not(self):
         root = self.root / 'crate'
