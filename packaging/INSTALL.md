@@ -97,3 +97,28 @@ checking, but the generated package declares runtime dependencies for pacman.
 Only application binaries, launcher, icons, installer and this guide enter the
 bundle. Publish the files from `dist/` as release assets after checking them on
 the target distribution.
+
+## Removal and rollback checks
+
+For a portable installation, quit Dock, then remove only the two executables,
+`<prefix>/share/applications/codex-dock.desktop` and
+`<prefix>/share/icons/hicolor/*/apps/codex-dock.png`. Remove the optional
+`~/.config/autostart/codex-dock.desktop` only if you enabled it. Keep
+`<prefix>/share/codex-dock/previous-*` until rollback is no longer needed.
+For packages, use `sudo apt remove codex-dock`, `sudo dnf remove codex-dock`,
+`sudo zypper remove codex-dock`, or `sudo pacman -R codex-dock` as appropriate.
+Do not remove Codex profile/configuration directories during application removal.
+
+For package rollback, retain the previous trusted package and its checksum.
+Quit Dock and all Codex windows, back up the data directories described above,
+then use your package manager's explicit version downgrade mechanism (for example
+`sudo pacman -U ./previous-package.pkg.tar.zst` or
+`sudo apt install --allow-downgrades ./previous-package.deb`). Do not run store
+repair as part of rollback. A binary rollback cannot undo data changes made by
+Codex Desktop or a manually invoked account operation; restore a coherent backup
+separately if needed. No historical-release compatibility is asserted until tested.
+
+`python3 scripts/check-linux-package.py dist/<archive>.tar.gz` verifies checksums,
+contents, executable modes, file-only installation, a simulated older-binary
+upgrade/rollback, and removal against disposable data sentinels. It does not launch
+a desktop, authenticate, or prove compatibility with an earlier released version.

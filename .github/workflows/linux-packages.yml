@@ -8,6 +8,7 @@ permissions:
   contents: read
 jobs:
   linux:
+    timeout-minutes: 45
     # Build on Ubuntu 22.04 for an older glibc baseline. Ubuntu 24.04 provides
     # a second compile/test environment; artifacts remain distro/ABI dependent.
     strategy:
@@ -17,7 +18,9 @@ jobs:
     env:
       APPIMAGE_EXTRACT_AND_RUN: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -30,20 +33,46 @@ jobs:
         run: cargo test --locked -p codex-dock-core
       - name: Build Linux archive
         run: make package-linux
+      - name: Verify portable package and isolated installer lifecycle
+        run: python3 scripts/check-linux-package.py dist/*.tar.gz
       - name: Install Tauri packaging CLI
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo install tauri-cli --version '^2' --locked
+        run: cargo install tauri-cli --version 2.12.4 --locked
       - name: Build AppImage, Debian and RPM packages
         if: matrix.os == 'ubuntu-22.04'
         run: make release
+      - name: Install and remove Debian package on disposable runner
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mkdir -p "$HOME/.codex-profiles/release-test"
+          printf disposable > "$HOME/.codex-profiles/release-test/preserve"
+          sudo apt-get install -y ./target/release/bundle/deb/*.deb
+          ldd /usr/bin/codex-dock > "$RUNNER_TEMP/dock-ldd.txt"
+          if rg 'not found' "$RUNNER_TEMP/dock-ldd.txt"; then exit 1; fi
+          command -v sqlite3
+          sudo apt-get remove -y codex-dock
+          test ! -e /usr/bin/codex-dock
+          test "$(cat "$HOME/.codex-profiles/release-test/preserve")" = disposable
+      - name: Build Arch package with pinned disposable tools
+        if: matrix.os == 'ubuntu-22.04'
+        run: sh packaging/package-arch-container.sh
+      - name: Checksum every package
+        run: |
+          for package in dist/*.tar.gz dist/*.pkg.tar.zst target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm; do
+            test ! -f "$package" || sha256sum "$package"
+          done > dist/SHA256SUMS
+          sha256sum --check dist/SHA256SUMS
       - name: Upload downloadable packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-dock-linux-${{ matrix.os }}
+          retention-days: 14
           if-no-files-found: error
           path: |
             dist/*.tar.gz
             dist/*.sha256
+            dist/*.pkg.tar.zst
+            dist/SHA256SUMS*
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm

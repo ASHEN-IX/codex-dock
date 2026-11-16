@@ -15,7 +15,8 @@ apply GitHub settings; a contribution cannot change the upstream owner's setting
 - Enable the dependency graph, Dependabot alerts/security updates, secret
   scanning and push protection where available.
 - Keep the default Actions token read-only and disallow Actions approving PRs.
-  Only the draft-release upload job needs `contents: write`.
+  Only the draft-release upload job needs `contents: write`; it also uses
+  `actions: read` to verify its approval environment.
 
 ## Protect main
 
@@ -48,7 +49,10 @@ workflows on a feature branch alone do not activate default-branch maintenance.
   The initial findings are recorded in [dependency-review.md](dependency-review.md).
 - **Draft release:** manual only, with an existing version tag. Build jobs have
   read-only permissions. A separate job downloads only package artifacts and
-  creates an unpublished draft, using narrowly scoped write permission.
+  creates an unpublished draft, using narrowly scoped write permission. The
+  `release-review` environment must have required maintainer reviewers and prevent
+  self-review. The job verifies those protection rules through the GitHub API and
+  fails closed if they are absent. Configure this environment before dispatch.
 - Third-party actions are pinned to verified upstream commit SHAs. Dependabot
   proposes Actions updates. Review updates to pinned CLI tools and cargo-audit's
   download checksum as well; they are not covered by Actions-version updates.
@@ -60,7 +64,9 @@ workspace lockfile to build against.
 
 ## Make a release
 
-1. Update both Cargo package versions and `src-tauri/tauri.conf.json`, then
+1. Resolve the license and third-party notice blockers in
+   [release/licensing.md](release/licensing.md). Update both Cargo package versions,
+   `src-tauri/tauri.conf.json`, and Arch `pkgver` (hyphens are removed), then
    regenerate the root lockfile with Cargo. Run CI and review security results.
 2. Manually smoke-test the desktop UI, tray, focus behavior, login and recovery
    on the distributions being claimed as supported, using disposable profiles.
@@ -68,7 +74,7 @@ workspace lockfile to build against.
    are encouraged when maintainers have signing keys configured.
 4. Run **Actions → Draft release** with that tag. The tagged commit must include
    this workflow, the local Linux setup action, and the release helper scripts.
-5. Review the resulting Debian package, AppImage and `SHA256SUMS`. The pipeline
+5. Review the resulting Debian, RPM, portable, Arch and AppImage packages and `SHA256SUMS`. The pipeline
    builds on Ubuntu 22.04 for an older ABI baseline, but does not promise runtime
    support for every Linux distribution, architecture or compositor.
 6. Review release notes, supported platforms, remaining issues and any required
