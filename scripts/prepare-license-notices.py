@@ -15,6 +15,17 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def read_notice(path):
+    # Universal-newline conversion would alter some upstream license files.
+    with path.open(encoding='utf-8', newline='') as stream:
+        return stream.read()
+
+
+def write_notice(path, text):
+    with path.open('w', encoding='utf-8', newline='') as stream:
+        stream.write(text)
+
+
 def generate(metadata, linux, output):
     packages = {p['id']: p for p in metadata['packages']}
     nodes = {n['id']: n for n in linux['resolve']['nodes']}
@@ -71,10 +82,10 @@ def generate(metadata, linux, output):
             missing.append(key)
             texts.append('UNRESOLVED NOTICE TEXT: redistribution review required.\n')
         for notice in notices:
-            texts.append(f'\n--- {notice.name} ---\n' + notice.read_text() + '\n')
+            texts.append(f'\n--- {notice.name} ---\n' + read_notice(notice) + '\n')
     output.mkdir(parents=True, exist_ok=True)
     (output / 'cargo-license-inventory.tsv').write_text('\n'.join(rows) + '\n')
-    (output / 'THIRD-PARTY-NOTICES.txt').write_text(''.join(texts))
+    write_notice(output / 'THIRD-PARTY-NOTICES.txt', ''.join(texts))
     (output / 'missing-notice-review.json').write_text(json.dumps(original_missing, indent=2, sort_keys=True) + '\n')
     (output / 'unresolved-linux-notices.json').write_text(json.dumps(missing, indent=2) + '\n')
     print(f'{len(rows)-1} registry entries; {len(original_missing)} original missing-root cases; {len(missing)} unresolved Linux cases')

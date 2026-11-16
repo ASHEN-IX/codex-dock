@@ -13,6 +13,9 @@ spec.loader.exec_module(checks)
 license_spec = importlib.util.spec_from_file_location('license_checks', ROOT / 'scripts/check-licenses.py')
 license_checks = importlib.util.module_from_spec(license_spec)
 license_spec.loader.exec_module(license_checks)
+notice_spec = importlib.util.spec_from_file_location('notice_generator', ROOT / 'scripts/prepare-license-notices.py')
+notice_generator = importlib.util.module_from_spec(notice_spec)
+notice_spec.loader.exec_module(notice_generator)
 
 
 class NoticeRegressionTests(unittest.TestCase):
@@ -27,6 +30,14 @@ class NoticeRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_upstream_crlf_notice_bytes_are_preserved(self):
+        source = self.root / 'upstream-license'
+        target = self.root / 'retained-license'
+        original = b'Synthetic copyright notice\r\nPermission terms\r\n'
+        source.write_bytes(original)
+        notice_generator.write_notice(target, notice_generator.read_notice(source))
+        self.assertEqual(target.read_bytes(), original)
 
     def test_complete_payload_passes(self):
         checks.check_tree(self.root)
