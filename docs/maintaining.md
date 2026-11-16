@@ -66,7 +66,7 @@ workspace lockfile to build against.
 
 1. Resolve the license and third-party notice blockers in
    [release/licensing.md](release/licensing.md). Update both Cargo package versions,
-   `src-tauri/tauri.conf.json`, and Arch `pkgver` (hyphens become dots), then
+   `src-tauri/tauri.conf.json`, and Arch `pkgver` (hyphens are removed), then
    regenerate the root lockfile with Cargo. Run CI and review security results.
 2. Manually smoke-test the desktop UI, tray, focus behavior, login and recovery
    on the distributions being claimed as supported, using disposable profiles.

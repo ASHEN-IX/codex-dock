@@ -21,8 +21,8 @@ versions["src-tauri/tauri.conf.json"] = json.loads(Path("src-tauri/tauri.conf.js
 arch_version = re.search(r"^pkgver=(.+)$", Path("packaging/arch/PKGBUILD").read_text(), re.MULTILINE)
 if not arch_version:
     raise SystemExit("Missing Arch pkgver")
-# Arch forbids hyphens in pkgver; map SemVer prerelease separators to dots.
-expected_arch = version.replace("-", ".")
+# Arch forbids hyphens in pkgver; remove SemVer prerelease hyphens. A dot before rc would sort after stable.
+expected_arch = version.replace("-", "")
 if arch_version[1] != expected_arch:
     raise SystemExit(f"Arch pkgver {arch_version[1]} does not match {expected_arch}")
 for path, actual in versions.items():

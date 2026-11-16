@@ -214,7 +214,7 @@ in separate sessions; Xwayland on a Wayland desktop is not a native X11 result.
 Propose **v0.1.0-rc.1**, subject to owner approval and closure of all P0/P1 blockers.
 Do not change current 0.1.0 versions or create/push a tag in this contribution.
 When approved, update both manifests, root Cargo.lock, Tauri config and Arch
-pkgver together; Arch represents this prerelease as 0.1.0.rc.1.
+pkgver together; Arch represents this prerelease as 0.1.0rc.1.
 
 Draft notes: “First Linux release candidate for independent testing. Provides
 AppImage, Debian, RPM, portable archive and Arch packages with SHA-256 checksums.
