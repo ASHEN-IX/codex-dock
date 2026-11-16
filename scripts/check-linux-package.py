@@ -23,6 +23,7 @@ def verify(archive):
         *(f'share/icons/hicolor/{size}x{size}/apps/codex-dock.png'
           for size in (32, 48, 64, 128, 256)),
     }
+    allowed_dirs = {str(parent) for name in expected for parent in Path('codex-dock', name).parents}
     checksum = archive.with_name(archive.name + '.sha256').read_text().split()
     assert checksum == [digest(archive), archive.name], 'Archive checksum mismatch'
     with tempfile.TemporaryDirectory(prefix='dock-package-check-') as temp:
@@ -37,6 +38,8 @@ def verify(archive):
                 assert path.parts[0] == 'codex-dock', 'Unexpected archive root'
                 assert member.isdir() or member.isfile(), 'Links/devices are forbidden'
                 assert member.mode & 0o7022 == 0, 'Unsafe file mode'
+                if member.isdir():
+                    assert str(path) in allowed_dirs, f'Unexpected directory: {path}'
                 if member.isfile():
                     relative = str(path.relative_to('codex-dock'))
                     files.add(relative)

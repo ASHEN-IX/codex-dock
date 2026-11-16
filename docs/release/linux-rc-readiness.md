@@ -127,7 +127,7 @@ Local checks completed:
 - cargo clippy --locked --workspace --all-targets -- -D warnings passed.
 - cargo build --locked --release --workspace passed. Package collectors select
   only Dock and CLI, not Cargo's synthetic mock-desktop or activation-smoke tools.
-- cargo test --locked --workspace -- --test-threads=1 passed in a private PID
+- cargo test --locked --workspace -- --test-threads=1 passed (255 tests, 26 suites) in a private PID
   namespace with effective/inheritable/ambient capabilities removed. Launch
   discovery therefore could not inspect or interfere with active host sessions.
 - Release production capability test passed; 20 release activation-policy tests
@@ -248,5 +248,19 @@ No merge, tag, release dispatch, release creation or publication was performed.
   profile sentinel: `DEBIAN_INSTALL_REMOVE_PASS`.
 - Arch wrapper also built in the pinned base-devel container, validating the new
   CI helper independently of the host makepkg installation.
-- Final RPM/Arch disposable transactions and PR CI results are added after their
-  completion. Until then they remain pending, never inferred from a build.
+- Baseline RPM installed on disposable Fedora 45, resolved its ELF libraries,
+  and removed cleanly while retaining the profile sentinel:
+  `RPM_INSTALL_REMOVE_PASS`. This is Fedora evidence, not an openSUSE result.
+- Local Arch package installed and removed on disposable Arch with library checks
+  and sentinel preservation: `ARCH_INSTALL_REMOVE_PASS`.
+- Revised Debian/RPM metadata/content inspection confirmed their explicit runtime
+  declarations, launcher/icons, /usr/bin placement, and absence of the CLI in
+  Tauri native bundles. Modified metadata still requires final Ubuntu CI package
+  installation; local host-built binaries have a newer glibc requirement.
+- Negative archive cases containing auth.json, traversal, or symlinks were rejected.
+- PR [#17](https://github.com/ASHEN-IX/codex-dock/pull/17) is submitted for independent
+  review. Initial PR CI is running: [CI](https://github.com/ASHEN-IX/codex-dock/actions/runs/43907844753),
+  [Security](https://github.com/ASHEN-IX/codex-dock/actions/runs/43907844516),
+  [Linux packages](https://github.com/ASHEN-IX/codex-dock/actions/runs/43907844687),
+  [Cross-platform](https://github.com/ASHEN-IX/codex-dock/actions/runs/43907844747).
+  Links for the frozen final commit and completed results appear in the export.
