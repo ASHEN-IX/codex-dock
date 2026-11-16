@@ -34,7 +34,7 @@ jobs:
       - name: Validate workflow syntax and expressions
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
       - name: Check release helper syntax
-        run: python3 -m py_compile scripts/check-release.py
+        run: python3 -m py_compile scripts/check-release.py scripts/check-linux-package.py scripts/prepare-license-notices.py
   linux:
     name: Linux (${{ matrix.os }})
     strategy:

@@ -31,6 +31,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: python3 scripts/check-release.py "$RELEASE_TAG"
+      - name: Require the owner-approved project license
+        run: test -s LICENSE
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal
@@ -38,15 +40,22 @@ jobs:
       - run: cargo test --locked -p codex-dock-core
       - run: python3 scripts/check-ui.py
       - name: Install the Tauri CLI
-        run: cargo install tauri-cli --version '^2' --locked
-      - name: Build portable Linux and Debian packages
-        run: cargo tauri build --bundles appimage,deb -- --locked
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      - name: Build AppImage, Debian and RPM packages
+        run: make release
+      - name: Build and verify portable Linux archive
+        run: |
+          make package-linux
+          python3 scripts/check-linux-package.py dist/*.tar.gz
+      - name: Build Arch package with pinned disposable tools
+        run: sh packaging/package-arch-container.sh
       - name: Collect only release packages and checksums
         run: |
           mkdir release-artifacts
-          cp target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb release-artifacts/
+          cp target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm dist/*.tar.gz dist/*.pkg.tar.zst release-artifacts/
           cd release-artifacts
-          sha256sum -- *.AppImage *.deb > SHA256SUMS
+          sha256sum -- *.AppImage *.deb *.rpm *.tar.gz *.pkg.tar.zst > SHA256SUMS
+          sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-packages
@@ -57,13 +66,26 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Configure this environment with required maintainer reviewers in GitHub.
+    environment: release-review
     permissions:
       contents: write
+      actions: read
     steps:
+      - name: Require configured maintainer approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          approved=$(gh api "repos/$GH_REPO/environments/release-review" --jq 'any(.protection_rules[]; .type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length) > 0)')
+          test "$approved" = true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-packages
           path: release-artifacts
+      - name: Verify downloaded release checksums
+        working-directory: release-artifacts
+        run: sha256sum --check SHA256SUMS
       - name: Create an unpublished release for review
         env:
           GH_TOKEN: ${{ github.token }}
